@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http: blob:; font-src 'self' data:; media-src data: https:; frame-src 'self' about:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Beacon</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="rail" aria-label="Accounts">
+      <div class="rail-accts" id="rail-accts"></div>
+      <button class="rail-btn add" id="btn-add-acct" title="Add a Gmail account" aria-label="Add a Gmail account">+</button>
+      <div class="rail-spacer"></div>
+      <button class="rail-btn update" id="btn-update" hidden title="Update ready" aria-label="Update ready">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+      </button>
+      <button class="rail-btn" id="btn-theme" title="Light or dark" aria-label="Switch light or dark">
+        <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+      </button>
+      <button class="rail-btn" id="btn-settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+      </button>
+    </aside>
+
+    <nav class="side" aria-label="Folders">
+      <button class="compose-btn" id="btn-compose">
+        <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span>Compose</span>
+      </button>
+      <div class="acct-name" id="acct-name"></div>
+      <div class="folders" id="folders"></div>
+      <div class="labels-head"><span>Labels</span><button class="mini" id="btn-new-label" title="New label" aria-label="New label">+</button></div>
+      <div class="folders" id="labels"></div>
+    </nav>
+
+    <main class="main">
+      <header class="topbar">
+        <form class="search" id="search-form" role="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search" type="search" placeholder="Search mail" aria-label="Search mail" autocomplete="off" spellcheck="false">
+        </form>
+      </header>
+      <div class="panes" id="panes">
+        <section class="list-pane" id="list-pane">
+          <div class="tabs" id="tabs" hidden></div>
+          <div class="toolbar" id="toolbar"></div>
+          <div class="list" id="list" role="list"></div>
+        </section>
+        <section class="reader-pane" id="reader" aria-live="polite"></section>
+      </div>
+    </main>
+  </div>
+
+  <div class="welcome" id="welcome" hidden></div>
+  <div class="modal-back" id="modal-back" hidden></div>
+  <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+  <script src="sanitize.js"></script>
+  <script src="app.js"></script>
+  <script src="later.js"></script>
+  <script src="list.js"></script>
+  <script src="reader.js"></script>
+  <script src="compose.js"></script>
+  <script src="cleanup.js"></script>
+  <script src="calendar.js"></script>
+  <script src="update.js"></script>
+  <script src="boot.js"></script>
+</body>
+</html>
