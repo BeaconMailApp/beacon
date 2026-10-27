@@ -1,0 +1,17 @@
+{
+  "name": "gmail-desk-build",
+  "private": true,
+  "description": "Build tools for Gmail Desk. The app itself lives in src/.",
+  "scripts": {
+    "start": "electron src",
+    "icons": "python tools/make-icons.py",
+    "build": "node tools/build.js"
+  },
+  "devDependencies": {
+    "@electron/packager": "18.3.6",
+    "electron": "33.2.1"
+  },
+  "allowScripts": {
+    "electron@33.2.1": true
+  }
+}

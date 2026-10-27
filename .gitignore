@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.zip
+# Your own Google key. Never commit it.
+src/client.json
