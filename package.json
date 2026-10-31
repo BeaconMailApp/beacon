@@ -1,7 +1,7 @@
 {
   "name": "gmail-desk-build",
   "private": true,
-  "description": "Build tools for Gmail Desk. The app itself lives in src/.",
+  "description": "Build tools for Beacon. The app itself lives in src/.",
   "scripts": {
     "start": "electron src",
     "icons": "python tools/make-icons.py",
