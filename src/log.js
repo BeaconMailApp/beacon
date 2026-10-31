@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
-const file = () => path.join(app.getPath('userData'), 'gmail-desk.log');
+const file = () => path.join(app.getPath('userData'), 'beacon.log');
 function log(...parts) {
   try {
     const line = new Date().toISOString() + ' ' + parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ') + '\n';

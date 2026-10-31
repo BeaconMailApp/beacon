@@ -10,8 +10,12 @@ const SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
 // Google Calendar: see and edit events, and see which calendars you have. Asked for, but not required,
 // so unticking them on the Google screen still lets mail work.
 const CAL_SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly'];
-const OPTIONAL_SCOPES = CAL_SCOPES.slice();
-const SCOPE = { filters: 'https://www.googleapis.com/auth/gmail.settings.basic', calendar: CAL_SCOPES };
+// Change a calendar's color (it syncs to Google Calendar everywhere). Optional too: without it only that one feature asks.
+const CAL_LIST_SCOPE = 'https://www.googleapis.com/auth/calendar.calendarlist';
+// Block senders and make filters (rules that also work in Gmail on the web and phone). Optional too.
+const FILTER_SCOPE = 'https://www.googleapis.com/auth/gmail.settings.basic';
+const OPTIONAL_SCOPES = CAL_SCOPES.concat([CAL_LIST_SCOPE, FILTER_SCOPE]);
+const SCOPE = { filters: FILTER_SCOPE, calendar: CAL_SCOPES };
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
@@ -124,4 +128,4 @@ async function revoke(token) {
   try { await fetch(REVOKE_URL + '?token=' + encodeURIComponent(token), { method: 'POST' }); } catch (_) {}
 }
 
-module.exports = { signIn, cancel, refresh, revoke, SCOPES, OPTIONAL_SCOPES, CAL_SCOPES, SCOPE };
+module.exports = { signIn, cancel, refresh, revoke, SCOPES, OPTIONAL_SCOPES, CAL_SCOPES, CAL_LIST_SCOPE, SCOPE };

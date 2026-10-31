@@ -1,5 +1,5 @@
 'use strict';
-// Schedule send and snooze. Gmail's API has neither, so Gmail Desk keeps the list in
+// Schedule send and snooze. Gmail's API has neither, so Beacon keeps the list in
 // settings.json and a timer here does the work while the app runs (in the tray counts).
 // Anything that came due while the computer was off happens at the next start.
 //

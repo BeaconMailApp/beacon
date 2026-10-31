@@ -106,4 +106,4 @@ async function unsubscribe(account, unsub, fromAddr, sendRaw) {
   throw new Error('This sender does not offer an unsubscribe link.');
 }
 
-module.exports = { scan, act, unsubscribe, SCOPES };
+module.exports = { scan, act, unsubscribe, parseUnsub, parseFrom, SCOPES };

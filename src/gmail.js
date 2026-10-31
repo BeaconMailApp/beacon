@@ -186,12 +186,22 @@ class Account {
     });
     return { threads: rows.filter(Boolean), nextPageToken: r.nextPageToken || null };
   }
+  /** Which draft each message of a thread is: {messageId: draftId}. */
+  async draftIdsForThread(threadId) {
+    const out = {}; let pageToken; let n = 0;
+    do {
+      const r = await this.api('GET', 'drafts', { query: { maxResults: 500, pageToken } });
+      for (const d of r.drafts || []) if (d.message && d.message.threadId === threadId) out[d.message.id] = d.id;
+      pageToken = r.nextPageToken;
+    } while (pageToken && ++n < 4);
+    return out;
+  }
   async getDraft(draftId) {
     const d = await this.api('GET', 'drafts/' + draftId, { query: { format: 'full' } });
     const m = d.message || {};
     const hd = m.payload ? m.payload.headers : [];
     const p = mime.parsePayload(m.payload);
-    return { draftId: d.id, threadId: m.threadId, to: mime.header(hd, 'To'), cc: mime.header(hd, 'Cc'), bcc: mime.header(hd, 'Bcc'), subject: mime.header(hd, 'Subject'), html: p.html || mime.textToHtml(p.text), inReplyTo: mime.header(hd, 'In-Reply-To'), references: mime.header(hd, 'References') };
+    return { draftId: d.id, threadId: m.threadId, to: mime.header(hd, 'To'), cc: mime.header(hd, 'Cc'), bcc: mime.header(hd, 'Bcc'), subject: mime.header(hd, 'Subject'), from: mime.header(hd, 'From'), html: p.html || mime.textToHtml(p.text), inReplyTo: mime.header(hd, 'In-Reply-To'), references: mime.header(hd, 'References') };
   }
 
   // ---------- permissions ----------
@@ -212,6 +222,9 @@ class Account {
     for (let i = 0; i < ids.length; i += 1000) await this.api('POST', 'messages/batchModify', { body: { ids: ids.slice(i, i + 1000), addLabelIds: add || [], removeLabelIds: remove || [] } });
   }
   trashMessage(id) { return this.api('POST', 'messages/' + id + '/trash'); }
+  /** The whole email exactly as it was received (for Show original and Download). */
+  async rawMessage(id) { const r = await this.api('GET', 'messages/' + id, { query: { format: 'raw' } }); return mime.fromB64url(r.raw || ''); }
+  canFilter() { return this.hasScope(oauth.SCOPE.filters); }
 
   // ---------- drafts sending (schedule send) ----------
   sendDraft(id) { return this.api('POST', 'drafts/send', { body: { id } }); }
@@ -223,6 +236,9 @@ class Account {
 
   // ---------- Google Calendar ----------
   hasCalendar() { return oauth.CAL_SCOPES.every((x) => this.hasScope(x)); }
+  canColorCalendars() { return this.hasScope(oauth.CAL_LIST_SCOPE) || this.hasScope('https://www.googleapis.com/auth/calendar'); }
+  /** Changes your settings for one calendar in your list, such as its color. */
+  calListPatch(calId, body) { return this.api('PATCH', CAL_BASE + 'users/me/calendarList/' + encodeURIComponent(calId), { body, query: { colorRgbFormat: true } }); }
   async calCalendars() {
     const out = []; let pageToken;
     do {

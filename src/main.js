@@ -1,11 +1,12 @@
 'use strict';
-// Gmail Desk 2: a Windows mail app for Gmail built on the Gmail API.
+// Beacon for Gmail: a Windows mail app for Gmail built on the Gmail API.
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, Notification, shell, ipcMain, dialog, nativeTheme, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, clipboard, Menu, nativeImage, Notification, shell, ipcMain, dialog, nativeTheme, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 
 const store = require('./store');
 const oauth = require('./oauth');
@@ -19,8 +20,9 @@ const updater = require('./updater');
 const later = require('./later');
 const calendar = require('./calendar');
 const priority = require('./priority');
+const { findCode } = require('./codes');
 
-const APP_NAME = win32.APP_NAME; // internal (keeps the saved-data folder)
+const APP_NAME = win32.APP_NAME;
 const DISPLAY_NAME = win32.DISPLAY_NAME;
 const IS_WIN = win32.IS_WIN;
 const MOCK = !!process.env.GMAIL_DESK_MOCK;
@@ -28,8 +30,10 @@ const ASSETS = path.join(__dirname, 'assets');
 const ICON_ICO = path.join(ASSETS, 'icon.ico');
 const ICON_PNG = path.join(ASSETS, 'icon.png');
 const POLL_MS = 60 * 1000;
+const PROTO = 'beacon-mail'; // buttons on Windows mail alerts open beacon-mail://<action>/... links
 
 app.setName(APP_NAME);
+if (!MOCK) win32.migrateData(); // settings and sign-ins from before the rename
 if (IS_WIN) app.setAppUserModelId(win32.AUMID);
 if (MOCK) app.setPath('userData', path.join(os.tmpdir(), 'gmail-desk-mock'));
 // Update testing: a throwaway profile, so the test copy never touches real sign-ins or the running app.
@@ -37,7 +41,10 @@ if (process.env.GMAIL_DESK_TEST_INSTALL_DIR) app.setPath('userData', path.join(o
 if (process.env.GMAIL_DESK_TEST_INSTALL_DIR && process.env.GMAIL_DESK_DEBUG_PORT) app.commandLine.appendSwitch('remote-debugging-port', process.env.GMAIL_DESK_DEBUG_PORT);
 
 const argv = process.argv.slice(1);
-const startHidden = argv.includes('--hidden');
+const isToastUrl = (a) => String(a).toLowerCase().startsWith(PROTO + ':');
+const toastArg = argv.find(isToastUrl);
+// Archive, Delete or Mark read on an alert while Beacon was closed: do it without opening the window.
+const startHidden = argv.includes('--hidden') || !!(toastArg && /^beacon-mail:\/\/(archive|trash|read|copy)\b/i.test(toastArg));
 
 // ---------------------------------------------------------------- single instance
 if (!app.requestSingleInstanceLock()) {
@@ -51,6 +58,8 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, args) => {
     if (args.includes('--uninstall')) { win32.uninstall(win); return; }
+    const tu = args.find(isToastUrl);
+    if (tu) { handleToastUrl(tu); return; }
     showWindow();
     const mailto = args.find((a) => /^mailto:/i.test(a));
     if (mailto) send('compose-mailto', parseMailto(mailto));
@@ -119,6 +128,7 @@ async function boot() {
     store.get().active = 'mock1';
   }
   if (win32.isInstalled()) win32.applyStartup(store.get().startup);
+  if (IS_WIN && win32.isInstalled() && !MOCK) app.setAsDefaultProtocolClient(PROTO);
   applyTheme();
   createWindow();
   createTray();
@@ -139,6 +149,7 @@ async function boot() {
   powerMonitor.on('resume', () => setTimeout(pollAll, 5000));
   const mailto = argv.find((a) => /^mailto:/i.test(a));
   if (mailto) win.webContents.once('did-finish-load', () => setTimeout(() => send('compose-mailto', parseMailto(mailto)), 800));
+  if (toastArg) win.webContents.once('did-finish-load', () => setTimeout(() => handleToastUrl(toastArg), 1500));
 }
 
 function applyTheme() {
@@ -260,6 +271,84 @@ function notify(title, body, onClick) {
   setTimeout(() => liveNotes.delete(n), 15 * 60 * 1000);
 }
 
+// ---------------------------------------------------------------- buttons on new-mail alerts (Windows)
+// Each button is a beacon-mail:// link that Windows hands back to Beacon. The links carry a random key
+// saved on this computer, so a web page cannot trigger Archive or Delete with a link of its own.
+function toastKey() {
+  const s = store.get();
+  if (!s.toastKey) { s.toastKey = crypto.randomBytes(16).toString('hex'); store.save(); }
+  return s.toastKey;
+}
+const xmlEsc = (v) => String(v == null ? '' : v).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+const toastUrl = (action, accountId, threadId, extra) => PROTO + '://' + action + '/?k=' + toastKey() + '&a=' + encodeURIComponent(accountId) + '&t=' + encodeURIComponent(threadId) + (extra ? '&c=' + encodeURIComponent(extra) : '');
+const TOAST_BUTTONS = [['Reply', 'reply'], ['Archive', 'archive'], ['Delete', 'trash'], ['Mark read', 'read']];
+const CODE_BUTTONS = [['Mark read', 'read'], ['Delete', 'trash']];
+
+function toastXml(meta, x) {
+  const multi = store.get().accounts.length > 1;
+  const code = x.code;
+  const buttons = code ? [['Copy ' + code.copy, 'copy', code.copy]].concat(CODE_BUTTONS) : TOAST_BUTTONS;
+  return '<toast launch="' + xmlEsc(toastUrl('open', meta.id, x.m.threadId)) + '" activationType="protocol"' + (code ? ' scenario="reminder"' : '') + '>'
+    + '<visual><binding template="ToastGeneric">'
+    + (code
+      ? '<text hint-maxLines="1">' + xmlEsc(code.code) + '</text><text hint-maxLines="1">' + xmlEsc('Code from ' + (displayName(x.from) || 'an email')) + '</text>'
+      : '<text hint-maxLines="1">' + xmlEsc(displayName(x.from) || 'New email') + '</text><text hint-maxLines="1">' + xmlEsc(x.subject || '(no subject)') + '</text>')
+    + '<text>' + xmlEsc((code ? (x.subject || '') + ' ' : '') + x.snippet.slice(0, 140)) + '</text>'
+    + (multi ? '<text placement="attribution">' + xmlEsc(meta.email) + '</text>' : '')
+    + '<image placement="appLogoOverride" hint-crop="circle" src="' + xmlEsc(pathToFileURL(ICON_PNG).href) + '"/>'
+    + '</binding></visual><actions>'
+    + buttons.map(([label, action, extra]) => '<action content="' + xmlEsc(label) + '" activationType="protocol" arguments="' + xmlEsc(toastUrl(action, meta.id, x.m.threadId, extra)) + '"/>').join('')
+    + '</actions></toast>';
+}
+
+/** One new email: a Windows alert with Reply, Archive, Delete and Mark read buttons. */
+function notifyMail(meta, x) {
+  const body = (x.subject || '(no subject)') + '\n' + x.snippet.slice(0, 120) + (store.get().accounts.length > 1 ? '\n' + meta.email : '');
+  const open = () => send('open-thread', { accountId: meta.id, threadId: x.m.threadId });
+  log('alert shown', x.code ? 'with code' : 'mail');
+  const title = x.code ? 'Code ' + x.code.code + ' from ' + (displayName(x.from) || 'an email') : (displayName(x.from) || 'New email');
+  // The buttons need the beacon-mail link registered, which only the installed copy does.
+  if (!IS_WIN || !win32.isInstalled() || MOCK || !Notification.isSupported()) return notify(title, body, open);
+  const n = new Notification({ toastXml: toastXml(meta, x) });
+  liveNotes.add(n);
+  n.on('failed', (_e, err) => { liveNotes.delete(n); log('alert with buttons failed', err); notify(title, body, open); });
+  n.on('close', () => liveNotes.delete(n));
+  n.show();
+  setTimeout(() => liveNotes.delete(n), 15 * 60 * 1000);
+}
+
+const TOAST_DONE = { archive: 'archive', trash: 'delete', read: 'mark as read' };
+/** Runs a button pressed on a mail alert (or a click on the alert itself). */
+function handleToastUrl(raw) {
+  let u; try { u = new URL(raw); } catch (_) { return; }
+  const action = u.hostname.toLowerCase(); const p = u.searchParams;
+  const meta = store.get().accounts.find((m) => m.id === p.get('a'));
+  const threadId = p.get('t') || '';
+  if (!store.get().toastKey || p.get('k') !== store.get().toastKey || !meta || !/^[\w-]{1,64}$/.test(threadId)) { showWindow(); return; }
+  log('alert button', action);
+  if (action === 'copy') {
+    const code = p.get('c') || '';
+    if (/^[A-Za-z0-9]{3,12}$/.test(code)) { clipboard.writeText(code); log('alert code copied'); }
+    return;
+  }
+  if (action === 'open' || action === 'reply') {
+    showWindow();
+    send(action === 'reply' ? 'reply-thread' : 'open-thread', { accountId: meta.id, threadId });
+    return;
+  }
+  if (!TOAST_DONE[action]) { showWindow(); return; }
+  (async () => {
+    try {
+      await ACTIONS[action](accountObj(meta.id), threadId);
+      if (action !== 'read') later.seen(meta.id, [threadId]);
+      send('mail-changed', meta.id);
+      await pollOne(meta);
+    } catch (e) {
+      notify('Could not ' + TOAST_DONE[action] + ' that email', e.message || 'Something went wrong.', () => send('open-thread', { accountId: meta.id, threadId }));
+    } finally { refreshTray(); }
+  })();
+}
+
 // ---------------------------------------------------------------- polling for new mail
 let polling = false;
 async function pollAll() {
@@ -294,30 +383,34 @@ async function pollOne(meta) {
     for (const rec of h.history || []) for (const ma of rec.messagesAdded || []) {
       const m = ma.message || {};
       const l = m.labelIds || [];
-      if (l.includes('INBOX') && l.includes('UNREAD') && !l.includes('SENT') && !l.includes('DRAFT') && (s.importantAlerts || !s.primaryOnly || l.includes('CATEGORY_PERSONAL') || !l.some((x) => x.startsWith('CATEGORY_')))) added.push(m);
+      if (l.includes('INBOX') && l.includes('UNREAD') && !l.includes('SENT') && !l.includes('DRAFT')) added.push(m);
     }
     if (added.length) send('mail-changed', meta.id);
     if (!added.length || !s.notify) return;
-    const alerts = [];
+    const alerts = []; const codes = [];
     for (const m of added.slice(0, 12)) {
       try {
         const full = await acct.messageMeta(m.id);
         const hd = full.payload ? full.payload.headers : [];
         const from = mime.header(hd, 'From'); const subject = mime.header(hd, 'Subject');
-        const snippet = (full.snippet || '').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+        const snippet = (full.snippet || '').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        const labels = full.labelIds || m.labelIds || [];
+        // Sign-in and verification codes always pop up, whatever the other alert settings say.
+        const code = findCode(subject, snippet);
+        if (code) { codes.push({ m, from, subject, snippet, code }); continue; }
+        if (!s.importantAlerts && s.primaryOnly && !labels.includes('CATEGORY_PERSONAL') && labels.some((x) => x.startsWith('CATEGORY_'))) continue;
         // Only the emails For You would show, unless that setting is off.
-        if (s.importantAlerts && !priority.score(meta.id, { id: m.threadId, from, subject, snippet, labelIds: full.labelIds || m.labelIds, participants: '', count: 1 }, meta.email).important) continue;
+        if (s.importantAlerts && !priority.score(meta.id, { id: m.threadId, from, subject, snippet, labelIds: labels, participants: '', count: 1 }, meta.email).important) continue;
         alerts.push({ m, from, subject, snippet });
       } catch (_) {}
     }
+    log('new mail', added.length, 'alerts', alerts.length, 'codes', codes.length);
+    for (const x of codes) notifyMail(meta, x);
     if (alerts.length > 3) {
       notify(alerts.length + (s.importantAlerts ? ' new important emails' : ' new emails'), meta.email, () => send('switch-account', meta.id));
       return;
     }
-    for (const x of alerts) {
-      notify(displayName(x.from) || 'New email', (x.subject || '(no subject)') + '\n' + x.snippet.slice(0, 120) + (store.get().accounts.length > 1 ? '\n' + meta.email : ''),
-        () => send('open-thread', { accountId: meta.id, threadId: x.m.threadId }));
-    }
+    for (const x of alerts) notifyMail(meta, x);
   } catch (e) {
     if (e instanceof AuthError || e.code === 'needs_auth') { meta.needsAuth = true; store.save(); sendState(); }
   }
@@ -329,7 +422,7 @@ function publicState() {
   return {
     accounts: s.accounts.map((a) => ({ id: a.id, email: a.email, name: a.name, color: a.color, needsAuth: !!a.needsAuth, calendar: calendarConnected(a.id) })),
     active: s.active, counts: Object.assign({}, counts),
-    settings: { theme: s.theme, darkEmails: s.darkEmails, notify: s.notify, primaryOnly: s.primaryOnly, startup: s.startup && win32.isInstalled(), undoSeconds: s.undoSeconds, importantAlerts: !!s.importantAlerts, alwaysImages: s.alwaysImages, trustedSenders: s.trustedSenders, calHidden: s.calHidden || {}, calView: s.calView || 'week' },
+    settings: { theme: s.theme, darkEmails: s.darkEmails, notify: s.notify, primaryOnly: s.primaryOnly, startup: s.startup && win32.isInstalled(), undoSeconds: s.undoSeconds, importantAlerts: !!s.importantAlerts, alwaysImages: s.alwaysImages, trustedSenders: s.trustedSenders, calHidden: s.calHidden || {}, calView: s.calView || 'week', density: s.density === 'compact' ? 'compact' : 'comfortable' },
     later: later.publicInfo(),
     installed: win32.isInstalled(), version: app.getVersion(), hasClient: !!client(), mock: MOCK, platform: process.platform, projectId: projectId(),
   };
@@ -341,7 +434,7 @@ function sendState() { send('state', publicState()); refreshTray(); }
 
 function setSettings(patch) {
   const s = store.get();
-  const allowed = ['theme', 'darkEmails', 'notify', 'importantAlerts', 'primaryOnly', 'startup', 'undoSeconds', 'alwaysImages', 'trustedSenders', 'calHidden', 'calView'];
+  const allowed = ['theme', 'darkEmails', 'notify', 'importantAlerts', 'primaryOnly', 'startup', 'undoSeconds', 'alwaysImages', 'trustedSenders', 'calHidden', 'calView', 'density'];
   for (const k of allowed) if (k in patch) s[k] = patch[k];
   if ('theme' in patch) applyTheme();
   if ('startup' in patch) win32.applyStartup(s.startup);
@@ -434,6 +527,32 @@ handle('update-check', async () => { await Promise.all([updater.check(), checkOn
 handle('signin-cancel', () => { oauth.cancel(); return true; });
 handle('update-install', () => applyUpdate());
 handle('open-log', () => shell.showItemInFolder(logFile()));
+// Problems in the window (errors, and what closed a reply box) go into the same log file.
+ipcMain.on('ui-debug', (_e, msg) => { if (typeof msg === 'string') log('ui', msg.slice(0, 3000)); });
+
+// Print: the window builds a plain page of the conversation; it is printed from a hidden window
+// with scripts off, so nothing in an email can run. Windows' print dialog also saves as PDF.
+handle('print', async (html) => {
+  if (typeof html !== 'string' || html.length > 40 * 1024 * 1024) throw new Error('That email is too large to print.');
+  const dir = path.join(os.tmpdir(), 'Beacon print');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, crypto.randomBytes(6).toString('hex') + '.html');
+  fs.writeFileSync(file, html);
+  const pw = new BrowserWindow({ show: false, width: 900, height: 1100, parent: win || undefined, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, images: true } });
+  pw.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  pw.webContents.on('will-navigate', (e) => e.preventDefault());
+  try {
+    await pw.loadFile(file);
+    await new Promise((r) => setTimeout(r, 400)); // let pictures finish loading
+    if (process.env.GMAIL_DESK_PRINT_PDF) { fs.writeFileSync(process.env.GMAIL_DESK_PRINT_PDF, await pw.webContents.printToPDF({ printBackground: true })); return true; }
+    return await new Promise((resolve, reject) => {
+      pw.webContents.print({ silent: false, printBackground: true }, (ok, why) => (ok || /cancel/i.test(why || '') ? resolve(ok) : reject(new Error(why || 'Printing did not finish.'))));
+    });
+  } finally {
+    if (!pw.isDestroyed()) pw.destroy();
+    try { fs.rmSync(file, { force: true }); } catch (_) {}
+  }
+});
 handle('make-default', () => { win32.registerMailto(); shell.openExternal('ms-settings:defaultapps'); });
 
 handle('account-add', async (hint) => {
@@ -560,7 +679,7 @@ async function calList(id, fresh) {
   if (!calCache[id] || fresh) calCache[id] = await calendar.calendars(accountObj(id));
   return calCache[id];
 }
-handle('cal-connect', async (id) => { showWindow(); await reauth(id); delete calCache[id]; if (MOCK) accountObj(id).calConnected = true; sendState(); return calendarConnected(id); });
+handle('cal-connect', async (id) => { showWindow(); await reauth(id); delete calCache[id]; if (MOCK) { accountObj(id).calConnected = true; accountObj(id).colorConnected = true; } sendState(); return calendarConnected(id); });
 handle('cal-calendars', (id, fresh) => calList(id, !!fresh));
 handle('cal-events', async (id, timeMin, timeMax, calIds) => {
   const all = await calList(id);
@@ -576,6 +695,20 @@ handle('cal-save', async (id, d) => {
 });
 handle('cal-delete', (id, calId, eventId, opts) => calendar.remove(accountObj(id), calId, eventId, opts || {}));
 handle('cal-rsvp', (id, calId, eventId, status) => calendar.respond(accountObj(id), calId, eventId, status));
+handle('cal-palette', () => calendar.PALETTE);
+handle('cal-event-color', (id, calId, eventId, colorId) => calendar.setEventColor(accountObj(id), String(calId), String(eventId), colorId));
+handle('cal-color', async (id, calId, hex) => {
+  const a = accountObj(id);
+  if (a.canColorCalendars && !a.canColorCalendars()) {
+    const e = new Error('Beacon needs one more Google permission to change calendar colors.'); e.code = 'calendar_color_scope'; throw e;
+  }
+  const cals = await calList(id);
+  const cal = cals.find((c) => c.id === calId);
+  if (!cal) throw new Error('That calendar is no longer in your list.');
+  try { cal.color = await calendar.setCalendarColor(a, calId, hex); }
+  catch (e) { if (e.code === 'calendar_scope') { e.code = 'calendar_color_scope'; e.message = 'Beacon needs one more Google permission to change calendar colors.'; } throw e; }
+  return cals;
+});
 handle('contacts-search', (id, q) => contacts.search(id, q));
 
 // Inbox cleanup. Scan results stay here so the window only ever passes a sender's address.
@@ -616,7 +749,120 @@ handle('cleanup-unsub', async (id, senderEmail) => {
   if (!list.includes(g.email)) { list.push(g.email); if (list.length > 2000) list.shift(); store.save(); }
   return r;
 });
-handle('thread', (id, threadId) => { later.seen(id, [threadId]); return accountObj(id).getThread(threadId); });
+// ---------------------------------------------------------------- one email's ⋮ menu
+const safeId = (x) => { const s = String(x || ''); if (!/^[\w-]{1,64}$/.test(s)) throw new Error('That email is no longer there.'); return s; };
+handle('msg-trash', async (id, msgId) => { await accountObj(id).trashMessage(safeId(msgId)); return true; });
+handle('msg-unread', async (id, msgId) => { await accountObj(id).batchModify([safeId(msgId)], ['UNREAD'], []); gd_refresh(id); return true; });
+function gd_refresh(id) { setTimeout(() => pollOne(store.get().accounts.find((m) => m.id === id) || {}).then(refreshTray).catch(() => {}), 500); }
+
+/** Show original: the headers that matter, Google's sender checks, and the full source. */
+handle('msg-original', async (id, msgId) => {
+  const buf = await accountObj(id).rawMessage(safeId(msgId));
+  const text = buf.toString('utf8');
+  const head = text.split(/\r?\n\r?\n/)[0].replace(/\r?\n[ \t]+/g, ' ');
+  const get = (name) => { const m = new RegExp('^' + name + ':\\s*(.*)$', 'im').exec(head); return m ? m[1].trim() : ''; };
+  const auth = get('Authentication-Results') || get('ARC-Authentication-Results');
+  const check = (k) => { const m = new RegExp('\\b' + k + '=(\\w+)', 'i').exec(auth); return m ? m[1].toUpperCase() : ''; };
+  return {
+    messageId: get('Message-ID'), date: get('Date'), from: get('From'), to: get('To'), subject: get('Subject'),
+    spf: check('spf'), dkim: check('dkim'), dmarc: check('dmarc'),
+    size: buf.length, source: buf.length > 3 * 1024 * 1024 ? text.slice(0, 3 * 1024 * 1024) + '\n\n[... cut here: the rest is in Download original]' : text,
+  };
+});
+
+/** Download message: saves the email as an .eml file that Outlook, Thunderbird and others can open. */
+handle('msg-download', async (id, msgId, subject) => {
+  const buf = await accountObj(id).rawMessage(safeId(msgId));
+  const name = String(subject || 'email').replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'email';
+  const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('downloads'), name + '.eml'), filters: [{ name: 'Email message', extensions: ['eml'] }] });
+  if (r.canceled || !r.filePath) return null;
+  fs.writeFileSync(r.filePath, buf);
+  return r.filePath;
+});
+
+/** Unsubscribe link next to the sender, the same way Gmail does it. */
+handle('msg-unsub', async (id, msgId) => {
+  const a = accountObj(id);
+  const meta = store.get().accounts.find((m) => m.id === id) || {};
+  const m = await a.messageHeaders(safeId(msgId), ['From', 'List-Unsubscribe', 'List-Unsubscribe-Post']);
+  const hd = (m.payload && m.payload.headers) || [];
+  const u = cleanup.parseUnsub(mime.header(hd, 'List-Unsubscribe'), mime.header(hd, 'List-Unsubscribe-Post'));
+  const r = await cleanup.unsubscribe(a, (u.http || u.mailto) ? u : null, meta.email, (o) => a.sendRaw(mime.buildRaw({ from: meta.email, to: o.to, subject: o.subject, html: mime.textToHtml(o.text) })));
+  if (r.method === 'browser') openExternal(r.url);
+  const sender = cleanup.parseFrom(mime.header(hd, 'From')).email;
+  log('unsubscribe', sender, r.method);
+  const st = store.get(); st.unsubscribed = st.unsubscribed || {};
+  const list = st.unsubscribed[id] || (st.unsubscribed[id] = []);
+  if (sender && !list.includes(sender)) { list.push(sender); if (list.length > 2000) list.shift(); store.save(); }
+  return r;
+});
+handle('unsubscribed', (id) => ((store.get().unsubscribed || {})[id]) || []);
+
+// Filters (rules) and Block: these are real Gmail filters, so they also work on the web and the phone.
+const FILTER_ACTIONS = { skipInbox: [[], ['INBOX']], markRead: [[], ['UNREAD']], star: [['STARRED'], []], important: [['IMPORTANT'], []], notImportant: [[], ['IMPORTANT']], neverSpam: [[], ['SPAM']], trash: [['TRASH'], []] };
+function filterQuery(c) {
+  const q = [];
+  const quote = (s) => (/\s/.test(s) ? '"' + s.replace(/"/g, '') + '"' : s);
+  if (c.from) q.push('from:' + quote(c.from));
+  if (c.to) q.push('to:' + quote(c.to));
+  if (c.subject) q.push('subject:(' + c.subject.replace(/[()]/g, '') + ')');
+  if (c.query) q.push(c.query);
+  if (c.hasAttachment) q.push('has:attachment');
+  return q.join(' ');
+}
+handle('filter-create', async (id, f) => {
+  const a = accountObj(id);
+  if (a.canFilter && !a.canFilter()) { const e = new Error('Beacon needs one more Google permission to make filters and block senders.'); e.code = 'filters_scope'; throw e; }
+  const c = {}; const str = (v) => String(v || '').trim().slice(0, 500);
+  for (const k of ['from', 'to', 'subject', 'query']) if (str(f.criteria && f.criteria[k])) c[k] = str(f.criteria[k]);
+  if (f.criteria && f.criteria.hasAttachment) c.hasAttachment = true;
+  if (!Object.keys(c).length) throw new Error('Fill in at least one of From, To, Subject or Has the words.');
+  const add = new Set(); const remove = new Set();
+  for (const [k, on] of Object.entries(f.actions || {})) {
+    if (!on || !FILTER_ACTIONS[k]) continue;
+    FILTER_ACTIONS[k][0].forEach((x) => add.add(x)); FILTER_ACTIONS[k][1].forEach((x) => remove.add(x));
+  }
+  if (f.actions && f.actions.label && /^[\w-]{1,100}$/.test(String(f.actions.label))) add.add(String(f.actions.label));
+  if (!add.size && !remove.size) throw new Error('Choose at least one thing for the filter to do.');
+  const action = {}; if (add.size) action.addLabelIds = [...add]; if (remove.size) action.removeLabelIds = [...remove];
+  try { await a.createFilter(c, action); }
+  catch (e) {
+    if (e.code === 'scope' || e.status === 403) { const x = new Error('Beacon needs one more Google permission to make filters and block senders.'); x.code = 'filters_scope'; throw x; }
+    if (/exists/i.test(e.message)) throw new Error('You already have a filter exactly like this one.');
+    throw e;
+  }
+  log('filter created', Object.keys(c).join(','), Object.keys(f.actions || {}).filter((k) => f.actions[k]).join(','));
+  // Also apply it to mail that is already there.
+  let applied = 0;
+  if (f.applyExisting) {
+    const ids = await a.messageIds(filterQuery(c), undefined, 2000);
+    const trash = add.has('TRASH'); add.delete('TRASH');
+    if (ids.length && (add.size || remove.size)) await a.batchModify(ids, [...add], [...remove]);
+    if (trash) { const q = ids.slice(); await Promise.all(Array.from({ length: Math.min(5, q.length) }, async () => { while (q.length) { const x = q.shift(); try { await a.trashMessage(x); } catch (_) {} } })); }
+    applied = ids.length;
+    send('mail-changed', id);
+  }
+  gd_refresh(id);
+  return { applied };
+});
+
+handle('thread', async (id, threadId) => {
+  later.seen(id, [threadId]);
+  const a = accountObj(id);
+  const t = await a.getThread(threadId);
+  // Drafts in a conversation are shown as "Draft" cards you can keep writing, not as sent messages.
+  const sent = t.messages.filter((m) => !m.labelIds.includes('DRAFT'));
+  const drafts = t.messages.filter((m) => m.labelIds.includes('DRAFT'));
+  t.drafts = [];
+  if (drafts.length && sent.length) {
+    let ids = {};
+    try { ids = await a.draftIdsForThread(threadId); } catch (e) { log('draft ids failed', e.message); }
+    t.drafts = drafts.filter((m) => ids[m.id]).map((m) => ({ draftId: ids[m.id], messageId: m.id, to: m.to, cc: m.cc, snippet: m.snippet || '', date: m.internalDate }));
+    // A draft we could not match stays in the conversation as before, so nothing disappears.
+    t.messages = sent.concat(drafts.filter((m) => !ids[m.id]));
+  }
+  return t;
+});
 handle('draft', async (id, draftId) => { const d = await accountObj(id).getDraft(draftId); const x = later.scheduleFor(id, draftId); if (x) d.scheduledAt = x.sendAt; return d; });
 handle('draft-delete', async (id, draftId) => { await accountObj(id).deleteDraft(draftId); later.dropDraft(id, draftId); });
 handle('send-as', (id) => accountObj(id).sendAs());
@@ -718,7 +964,7 @@ handle('attachment-save', async (id, att) => {
 });
 handle('attachment-open', async (id, att) => {
   const buf = att.data ? mime.fromB64url(att.data) : await accountObj(id).attachment(att.messageId, att.attachmentId);
-  const dir = path.join(os.tmpdir(), 'Gmail Desk attachments', crypto.randomBytes(4).toString('hex'));
+  const dir = path.join(os.tmpdir(), 'Beacon attachments', crypto.randomBytes(4).toString('hex'));
   fs.mkdirSync(dir, { recursive: true });
   const p = path.join(dir, safeName(att.filename));
   fs.writeFileSync(p, buf);
@@ -729,7 +975,7 @@ handle('attachment-open', async (id, att) => {
 function safeName(n) { return String(n || 'attachment').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 180) || 'attachment'; }
 
 handle('save-temp-file', async (name, base64) => {
-  const dir = path.join(os.tmpdir(), 'Gmail Desk attachments', 'pasted');
+  const dir = path.join(os.tmpdir(), 'Beacon attachments', 'pasted');
   fs.mkdirSync(dir, { recursive: true });
   const safe = safeName(name || 'pasted_image.png');
   const p = path.join(dir, `${Date.now()}_${safe}`);
