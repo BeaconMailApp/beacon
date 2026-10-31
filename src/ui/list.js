@@ -98,8 +98,10 @@ function renderToolbar() {
   const cb = h('input', { type: 'checkbox', class: 'check', checked: all, 'aria-label': 'Select all', title: 'Select all on this page' });
   cb.indeterminate = n > 0 && !all;
   cb.addEventListener('change', () => { if (cb.checked) S.threads.forEach((t) => S.sel.add(t.id)); else S.sel.clear(); renderList(); });
-  const kids = [cb];
   const v = S.view;
+  const kids = v.from === 'cleanup'
+    ? [tbBtn('back', 'Back to Clean up (Esc)', backToCleanup, 'back-btn'), h('span', { class: 'tb-sep' }), cb]
+    : [cb];
   const inSpam = v.kind === 'folder' && v.key === 'spam';
   const inTrash = v.kind === 'folder' && v.key === 'trash';
   const inDrafts = v.kind === 'folder' && (v.key === 'drafts' || v.key === 'scheduled');

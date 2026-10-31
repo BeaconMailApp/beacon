@@ -12,6 +12,13 @@ S.clean = { acct: null, scope: 'promotions', state: 'idle', done: 0, total: 0, e
 
 function openCleanup() { setView({ kind: 'cleanup' }); }
 
+/** From a sender's emails (opened with View) back to Clean up, at the same scroll spot. */
+function backToCleanup() {
+  const y = S.clean.scrollBack || 0;
+  setView({ kind: 'cleanup' });
+  requestAnimationFrame(() => { $('list').scrollTop = y; });
+}
+
 function cleanupScan(force) {
   const c = S.clean;
   const key = S.acct + '|' + c.scope;
@@ -96,7 +103,7 @@ function senderRow(g) {
       btn('Archive all', 'Take all of their mail out of the inbox', () => cleanAct(g, 'archive')),
       g.unread ? btn('Mark read', 'Mark all of their mail as read', () => cleanAct(g, 'read')) : null,
       btn('Delete all', 'Move all of their mail to Trash', () => cleanAct(g, 'trash'), 'danger'),
-      btn('View', 'Show their emails', () => { const q = 'from:' + g.email; $('search').value = q; S.view = { kind: 'search', q }; S.sel.clear(); closeThread(true); renderSide(); loadList(); })));
+      btn('View', 'Show their emails', () => { const q = 'from:' + g.email; S.clean.scrollBack = $('list').scrollTop; $('search').value = q; S.view = { kind: 'search', q, from: 'cleanup', sender: nm || g.email }; S.sel.clear(); closeThread(true); renderSide(); loadList(); })));
 }
 
 function confirmBox(title, text, okLabel, opts = {}) {

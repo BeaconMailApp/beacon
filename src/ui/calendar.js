@@ -122,7 +122,7 @@ function calConnectCard() {
     h('ol', {},
       h('li', {}, h('span', { text: 'Turn on the Google Calendar API in your Google Cloud project (the same one Beacon uses). Click Enable on the page that opens, then come back.' }),
         h('div', {}, h('button', { class: 'btn', onclick: () => gd.external('https://console.cloud.google.com/apis/library/calendar-json.googleapis.com' + (pid ? '?project=' + encodeURIComponent(pid) : '')) }, icon('external'), 'Open the Calendar API page'))),
-      h('li', {}, h('span', { text: 'Sign in again and tick the two calendar boxes on the Google screen.' }),
+      h('li', {}, h('span', { text: 'Sign in again and tick the calendar boxes on the Google screen.' }),
         h('div', {}, h('button', { class: 'btn primary', onclick: async (e) => {
           e.target.disabled = true;
           try { const ok = await gd.calConnect(S.acct); S.st = await gd.state(); if (!ok) toast('The calendar boxes were not ticked. Try again and tick them.', null, null, 8000); c.state = 'idle'; c.code = ''; calLoad({ fresh: true }); }
@@ -135,15 +135,26 @@ function calendarsMenu(anchor) {
   const items = [{ head: 'Show calendars' }];
   for (const cal of S.cal.cals) {
     const cb = h('input', { type: 'checkbox', checked: !hidden.has(cal.id) });
-    const row = h('label', { class: 'cal-pick' }, cb, h('span', { class: 'swatch', style: 'background:' + cal.color }), h('span', { text: cal.name + (cal.writable ? '' : ' (view only)') }));
+    let colors = null;
+    const sw = h('button', { type: 'button', class: 'swatch sw-btn', style: 'background:' + cal.color, title: 'Change color', 'aria-label': 'Change the color of ' + cal.name,
+      onclick: async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (colors) { colors.remove(); colors = null; return; }
+        document.querySelectorAll('.menu .cal-colors').forEach((x) => x.remove());
+        colors = await calendarColorRow(cal, sw);
+        wrap.append(colors);
+      } });
+    const row = h('label', { class: 'cal-pick' }, cb, h('span', { text: cal.name + (cal.writable ? '' : ' (view only)') }));
+    const wrap = h('div', { class: 'cal-pick-wrap' }, h('div', { class: 'cal-pick-row' }, sw, row));
     cb.addEventListener('change', async () => {
       if (cb.checked) hidden.delete(cal.id); else hidden.add(cal.id);
       const all = Object.assign({}, S.st.settings.calHidden || {}); all[S.acct] = [...hidden];
       try { S.st = await gd.settings({ calHidden: all }); } catch (_) {}
       calLoad({ silent: true });
     });
-    items.push({ el: row });
+    items.push({ el: wrap });
   }
+  items.push({ el: h('div', { class: 'cal-pick-hint', text: 'Click a color square to change that calendar\'s color. It changes in Google Calendar too.' }) });
   const m = popMenu(anchor, items);
   m.addEventListener('click', (e) => e.stopPropagation());
 }
@@ -157,7 +168,7 @@ function eventChip(ev, opts = {}) {
   const st = evStart(ev);
   const declined = ev.myStatus === 'declined';
   const label = (ev.allDay || opts.noTime ? '' : fmtTime(st) + ' ') + (ev.title || '(no title)');
-  return h('button', { class: 'cal-chip' + (ev.allDay ? ' allday' : '') + (declined ? ' declined' : '') + (ev.myStatus === 'needsAction' ? ' pending' : ''), title: label, style: ev.allDay ? 'background:' + ev.color : '--c:' + ev.color, onclick: (e) => { e.stopPropagation(); openEventEditor(ev); } },
+  return h('button', { class: 'cal-chip' + (ev.allDay ? ' allday' : '') + (declined ? ' declined' : '') + (ev.myStatus === 'needsAction' ? ' pending' : ''), title: label, style: ev.allDay ? 'background:' + ev.color + ';--tc:' + textOn(ev.color) : '--c:' + ev.color, onclick: (e) => { e.stopPropagation(); openEventEditor(ev); } },
     ev.allDay ? null : h('span', { class: 'dot' }), h('span', { class: 't', text: label }));
 }
 
@@ -185,7 +196,7 @@ function timeView() {
     for (const p of layoutDay(timed, d)) {
       const e = p.ev; const st = evStart(e); const en = evEnd(e);
       const block = h('button', { class: 'cal-ev' + (e.myStatus === 'declined' ? ' declined' : '') + (e.myStatus === 'needsAction' ? ' pending' : '') + (p.height < 30 ? ' short' : ''),
-        style: `top:${p.top}px;height:${Math.max(18, p.height - 2)}px;left:calc(${p.left * 100}% + 1px);width:calc(${p.width * 100}% - 3px);--c:${e.color}`,
+        style: `top:${p.top}px;height:${Math.max(18, p.height - 2)}px;left:calc(${p.left * 100}% + 1px);width:calc(${p.width * 100}% - 3px);--c:${e.color};--tc:${textOn(e.color)}`,
         title: (e.title || '(no title)') + '\n' + fmtTime(st) + ' to ' + fmtTime(en) + (e.location ? '\n' + e.location : ''), onclick: (ev) => { ev.stopPropagation(); openEventEditor(e); } },
       h('span', { class: 't', text: e.title || '(no title)' }), h('span', { class: 'tm', text: fmtTime(st) + ' to ' + fmtTime(en) }), e.location && p.height > 56 ? h('span', { class: 'tm', text: e.location }) : null);
       col.append(block);
@@ -305,6 +316,16 @@ function openEventEditor(ev, preset) {
     f.meet = h('input', { type: 'checkbox' });
     f.desc = h('textarea', { class: 'ev-in', rows: 4, placeholder: 'Add a description' }); f.desc.value = descText;
     f.notify = h('input', { type: 'checkbox', checked: true });
+    const colorId0 = isNew ? '' : (ev.colorId || '');
+    f.colorId = colorId0;
+    const calColorOf = (id) => (S.cal.cals.find((c) => c.id === id) || {}).color;
+    f.colors = h('div', { class: 'ev-colors' });
+    const drawColors = async () => {
+      const g = colorGrid(await eventColorChoices(calColorOf(f.cal.value)), f.colorId, (k) => { f.colorId = k; });
+      f.colors.replaceChildren(g);
+    };
+    drawColors();
+    f.cal.addEventListener('change', drawColors);
     const err = h('div', { class: 'c-err', role: 'alert' });
     const row = (label, ...kids) => h('div', { class: 'ev-row' }, h('label', { class: 'ev-lbl', text: label }), h('div', { class: 'ev-val' }, ...kids));
 
@@ -334,6 +355,7 @@ function openEventEditor(ev, preset) {
       d.notify = guests.length > 0 && f.notify.checked;
       if (f.repeat) d.recurrence = f.repeat.value;
       if (!isNew && f.cal.value !== ev.calendarId) d.moveTo = f.cal.value;
+      if (f.colorId !== colorId0) d.colorId = f.colorId;
       if (!isNew && ev.recurringEventId) {
         const scope = await chooseScope('Save');
         if (!scope) return;
@@ -353,6 +375,7 @@ function openEventEditor(ev, preset) {
       row('When', h('div', { class: 'ev-when' }, f.sd, f.st, h('span', { class: 'ev-to', text: 'to' }), f.ed, f.et), h('label', { class: 'ev-check' }, f.allDay, 'All day')),
       f.repeat ? row('Repeat', f.repeat) : row('Repeat', h('span', { class: 'ev-note', text: 'Part of a repeating series' })),
       row('Calendar', f.cal),
+      row('Color', f.colors),
       row('Where', f.loc),
       row('Guests', f.guests, h('label', { class: 'ev-check' }, f.notify, 'Email guests about this')),
       !isNew && ev.meet ? row('Video', h('button', { class: 'btn', onclick: () => gd.external(ev.meet) }, icon('external'), 'Join Google Meet')) : row('Video', h('label', { class: 'ev-check' }, f.meet, 'Add a Google Meet video call')),
@@ -399,12 +422,22 @@ function eventDetails(ev) {
       try { await gd.calRsvp(S.acct, ev.calendarId, ev.id, status); close(); toast('Answer sent: ' + statusName[status]); calLoad({ silent: true }); }
       catch (e) { toast('Could not answer: ' + e.message, null, null, 8000); }
     };
+    const detailsColors = h('div', { class: 'ev-line ev-colors-line' });
+    eventColorChoices(ev.calendarColor || ev.color).then((choices) => {
+      detailsColors.append(h('span', { class: 'muted', text: 'Color' }), colorGrid(choices, ev.colorId || '', async (k, c) => {
+        const prev = { colorId: ev.colorId, color: ev.color };
+        ev.colorId = k; ev.color = k ? c.hex : (ev.calendarColor || ev.color); renderCalendar();
+        try { await gd.calEventColor(S.acct, ev.calendarId, ev.id, k); calLoad({ silent: true }); }
+        catch (e) { Object.assign(ev, prev); renderCalendar(); toast('Could not change the color: ' + e.message, null, null, 8000); }
+      }));
+    }).catch(() => {});
     const desc = h('div', { class: 'ev-desc' }); if (ev.description) desc.append(safeFragment(ev.description.includes('<') ? ev.description : escapeHtml(ev.description).replace(/\n/g, '<br>')));
     box.append(...[
       h('div', { class: 'ev-top' }, h('h2', { text: ev.title || '(no title)' }), tbBtn('close', 'Close', () => close())),
       h('div', { class: 'ev-line', text: when }),
       h('div', { class: 'ev-line muted' }, h('span', { class: 'swatch', style: 'background:' + ev.color }), ev.calendarName + (ev.organizer && !ev.organizerSelf ? ' · organized by ' + ev.organizer : '')),
       ev.location ? h('div', { class: 'ev-line', text: ev.location }) : null,
+      (S.cal.cals.find((c) => c.id === ev.calendarId) || {}).writable ? detailsColors : null,
       ev.meet ? h('div', { class: 'ev-line' }, h('button', { class: 'btn', onclick: () => gd.external(ev.meet) }, icon('external'), 'Join Google Meet')) : null,
       ev.description ? desc : null,
       ev.attendees.length ? h('div', { class: 'ev-guests' }, h('div', { class: 'ev-lbl', text: ev.attendees.length + ' guests' }),
@@ -415,4 +448,85 @@ function eventDetails(ev) {
         ev.link ? h('button', { class: 'btn', text: 'Open in Google Calendar', onclick: () => gd.external(ev.link) }) : null,
         h('button', { class: 'btn primary', text: 'Close', onclick: () => close() }))].filter(Boolean));
   });
+}
+
+// ----------------------------------------------------------------- colors
+// The palette comes from the main process: Google Calendar's 11 event colors and 24 calendar colors.
+async function calPalette() {
+  if (!S.cal.palette) S.cal.palette = await gd.calPalette();
+  return S.cal.palette;
+}
+/** Dark or light text, whichever reads better on this color. */
+function textOn(hex) {
+  const n = parseInt(String(hex || '#4285f4').slice(1), 16); const r = n >> 16; const g = (n >> 8) & 255; const b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 170 ? '#1d1d1d' : '#ffffff';
+}
+/** A row of round color buttons. colors: [{key, name, hex}]; the one whose key is current gets a check. */
+function colorGrid(colors, current, onPick, cls) {
+  const grid = h('div', { class: 'color-grid' + (cls ? ' ' + cls : ''), role: 'radiogroup' });
+  const paint = (cur) => grid.querySelectorAll('.cg-sw').forEach((b) => { const on = b.dataset.key === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+  for (const c of colors) {
+    grid.append(h('button', { type: 'button', class: 'cg-sw' + (c.wide ? ' wide' : ''), role: 'radio', 'data-key': c.key, title: c.name, 'aria-label': c.name, style: '--sw:' + c.hex + ';--tc:' + textOn(c.hex),
+      onclick: (e) => { e.preventDefault(); e.stopPropagation(); paint(c.key); onPick(c.key, c); } }, c.wide ? h('span', { text: c.name }) : null));
+  }
+  paint(current);
+  grid.paint = paint;
+  return grid;
+}
+
+/** Asks for the extra Google permission that changing calendar colors needs, then tries again. */
+function askColorPermission(retry) {
+  modal((box, close) => {
+    box.append(
+      h('h2', { text: 'Allow Beacon to change calendar colors' }),
+      h('p', { class: 'sub', text: 'Calendar colors are saved to your Google account, so they match on your phone and on the web too. That takes one more Google permission.' }),
+      h('ol', { class: 'perm-steps' },
+        h('li', { text: 'Click Allow. Your browser opens the Google sign-in.' }),
+        h('li', { text: 'Tick the box "See, add, and remove Google calendars you\'re subscribed to", along with the others, then Continue.' }),
+        h('li', { text: 'Come back to Beacon. The color is changed right away.' })),
+      h('div', { class: 'modal-actions' }, h('span', { class: 'grow' }),
+        h('button', { class: 'btn', text: 'Not now', onclick: () => close() }),
+        h('button', { class: 'btn primary', text: 'Allow', onclick: async (e) => {
+          e.target.disabled = true;
+          try { await gd.calConnect(S.acct); S.st = await gd.state(); close(); await retry(true); }
+          catch (err) { e.target.disabled = false; toast(err.message, null, null, 8000); }
+        } })));
+  });
+}
+
+/** Changes a calendar's color everywhere (Beacon and Google Calendar). */
+async function setCalendarColor(cal, hex, again) {
+  const before = cal.color;
+  cal.color = hex; calRepaint();
+  try {
+    S.cal.cals = await gd.calColor(S.acct, cal.id, hex);
+    toast(cal.name + ' is now ' + ((S.cal.palette.calendar.find((c) => c.hex === hex) || {}).name || 'that color'));
+    calLoad({ silent: true });
+  } catch (e) {
+    cal.color = before; calRepaint();
+    if (e.code === 'calendar_color_scope' && !again) askColorPermission(() => setCalendarColor(cal, hex, true));
+    else toast('Could not change the color: ' + e.message, null, null, 8000);
+  }
+}
+
+/** Repaints events right away with the colors in S.cal.cals (before Google answers). */
+function calRepaint() {
+  const byId = new Map(S.cal.cals.map((c) => [c.id, c.color]));
+  for (const ev of S.cal.events) { const cc = byId.get(ev.calendarId); if (cc) { ev.calendarColor = cc; if (!ev.colorId) ev.color = cc; } }
+  if (S.view && S.view.kind === 'calendar') renderCalendar();
+}
+
+/** The palette shown under a calendar in the Calendars menu. */
+async function calendarColorRow(cal, swatchBtn) {
+  const pal = await calPalette();
+  return colorGrid(pal.calendar.map((c) => ({ key: c.hex, name: c.name, hex: c.hex })), (cal.color || '').toLowerCase(), (hex) => {
+    swatchBtn.style.background = hex;
+    setCalendarColor(cal, hex);
+  }, 'cal-colors');
+}
+
+/** Event colors for the editor and the details window: "Calendar color" first, then Google's 11. */
+async function eventColorChoices(calColor) {
+  const pal = await calPalette();
+  return [{ key: '', name: 'Calendar color', hex: calColor || '#4285f4', wide: true }].concat(pal.event.map((c) => ({ key: c.id, name: c.name, hex: c.hex })));
 }

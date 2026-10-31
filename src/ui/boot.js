@@ -61,6 +61,8 @@ function settingsModal() {
     };
     const theme = h('select', { 'aria-label': 'Theme', onchange: async (e) => { S.st = await gd.settings({ theme: e.target.value }); applyTheme(); renderReader(); } },
       ...[['dark', 'Dark'], ['light', 'Light'], ['system', 'Match Windows']].map(([v, l]) => h('option', { value: v, selected: set.theme === v, text: l })));
+    const density = h('select', { 'aria-label': 'Email list', onchange: async (e) => { S.st = await gd.settings({ density: e.target.value }); applyTheme(); } },
+      ...[['comfortable', 'Comfortable'], ['compact', 'Compact']].map(([v, l]) => h('option', { value: v, selected: (set.density || 'comfortable') === v, text: l })));
     const undo = h('select', { 'aria-label': 'Undo send', onchange: async (e) => { S.st = await gd.settings({ undoSeconds: Number(e.target.value) }); } },
       ...[0, 5, 10, 20, 30].map((n) => h('option', { value: String(n), selected: Number(set.undoSeconds) === n, text: n ? n + ' seconds' : 'Off' })));
     const accts = st.accounts.map((a, i) => h('div', { class: 'set-row' },
@@ -72,8 +74,9 @@ function settingsModal() {
       h('h2', { text: 'Settings' }), h('p', { class: 'sub', text: 'Beacon ' + st.version + (st.mock ? ' (test mode)' : '') }),
       updateSettingsRow(),
       h('div', { class: 'set-row' }, h('div', { class: 'lbl' }, 'Theme'), theme),
+      h('div', { class: 'set-row' }, h('div', { class: 'lbl' }, 'Email list', h('small', { text: 'Compact fits more emails on screen, one line each' })), density),
       sw('darkEmails', 'Dark email bodies', 'Turns bright emails dark when the dark theme is on'),
-      sw('notify', 'New mail alerts', 'A Windows notification with the sender and subject'),
+      sw('notify', 'New mail alerts', 'A Windows notification with Reply, Archive, Delete and Mark read buttons'),
       sw('importantAlerts', 'Only alert me for For You emails', 'Skips alerts for mail For You thinks is not important'),
       sw('primaryOnly', 'Count Primary only', 'The unread number ignores Promotions, Social and Updates'),
       sw('alwaysImages', 'Always show pictures in emails', 'When off, pictures load only when you ask (blocks tracking pixels)'),
@@ -94,7 +97,7 @@ function settingsModal() {
 }
 
 function shortcutsModal() {
-  const rows = [['c', 'Compose'], ['/', 'Search'], ['j / k', 'Next / previous conversation'], ['Enter or o', 'Open'], ['u or Esc', 'Back to the list'], ['e', 'Archive'], ['#', 'Delete'], ['!', 'Report spam'], ['s', 'Star'], ['r', 'Reply'], ['a', 'Reply all'], ['f', 'Forward'], ['b', 'Snooze'], ['Shift+U / Shift+I', 'Mark unread / read'], ['+ / -', 'Important / not important (teaches For You)'], ['x', 'Select'], ['Ctrl+Enter', 'Send'], ['Ctrl+1…9', 'Switch account'], ['?', 'This list']];
+  const rows = [['c', 'Compose'], ['/', 'Search'], ['j / k', 'Next / previous conversation'], ['Enter or o', 'Open'], ['u or Esc', 'Back to the list'], ['e', 'Archive'], ['#', 'Delete'], ['!', 'Report spam'], ['s', 'Star'], ['r', 'Reply'], ['a', 'Reply all'], ['f', 'Forward'], ['b', 'Snooze'], ['Shift+U / Shift+I', 'Mark unread / read'], ['+ / -', 'Important / not important (teaches For You)'], ['x', 'Select'], ['Ctrl+Enter', 'Send'], ['Ctrl+P', 'Print the open email'], ['Ctrl+1…9', 'Switch account'], ['?', 'This list']];
   modal((box, close) => box.append(h('h2', { text: 'Keyboard shortcuts' }), h('div', { style: 'height:8px' }),
     ...rows.map(([k, d]) => h('div', { class: 'set-row' }, h('div', { class: 'lbl', text: d }), h('b', { text: k }))),
     h('div', { class: 'modal-actions' }, h('button', { class: 'btn primary', text: 'Close', onclick: close }))));
@@ -118,11 +121,13 @@ function targetIds() {
   return f ? [f] : [];
 }
 document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') { e.preventDefault(); if (S.thread && S.openId) printThread(); else toast('Open an email to print it.'); return; }
   if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key)) { const a = S.st && S.st.accounts[Number(e.key) - 1]; if (a) { e.preventDefault(); switchAccount(a.id); } return; }
   if (e.key === 'Escape') {
     if (!$('modal-back').hidden) { $('modal-back').hidden = true; return; }
     if (document.querySelector('.menu')) { closeMenus(); return; }
     if (!isTyping(e) && S.openId) { closeThread(); return; }
+    if (!isTyping(e) && S.view.from === 'cleanup') { backToCleanup(); return; }
   }
   if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey || !$('modal-back').hidden) return;
   const k = e.key;
@@ -130,7 +135,7 @@ document.addEventListener('keydown', (e) => {
   const map = {
     c: () => startCompose(), '/': () => $('search').focus(), j: () => moveFocus(1), k: () => moveFocus(-1),
     o: () => { const f = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.id; if (f) openThread(f); },
-    u: () => closeThread(), e: () => act(ids, 'archive'), '#': () => act(ids, 'trash'), '!': () => act(ids, 'spam'),
+    u: () => (!S.openId && S.view.from === 'cleanup' ? backToCleanup() : closeThread()), e: () => act(ids, 'archive'), '#': () => act(ids, 'trash'), '!': () => act(ids, 'spam'),
     s: () => { const t = threadById(ids[0]) || S.thread; if (t) act(ids, t.starred ? 'unstar' : 'star'); },
     r: () => S.thread && startReply('reply'), a: () => S.thread && startReply('replyall'), f: () => S.thread && startReply('forward'),
     b: () => { if (!ids.length) return; const anchor = document.querySelector('.r-tools [aria-label^="Snooze"]') || document.querySelector('#toolbar [aria-label^="Snooze"]') || $('search'); snoozeMenu(anchor, ids); },
@@ -174,6 +179,11 @@ gd.onMailChanged((id) => {
 gd.onOpenThread(async ({ accountId, threadId }) => {
   if (accountId !== S.acct) await switchAccount(accountId);
   openThread(threadId);
+});
+gd.onReplyThread(async ({ accountId, threadId }) => {
+  if (accountId !== S.acct) await switchAccount(accountId);
+  await openThread(threadId);
+  if (S.thread && S.openId === threadId) startReply('reply');
 });
 gd.onSwitchAccount((id) => switchAccount(id));
 gd.onComposeNew(() => startCompose());

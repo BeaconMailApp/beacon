@@ -1,5 +1,5 @@
 'use strict';
-/* Gmail Desk interface. All Gmail calls go through window.gd (main process). */
+/* Beacon interface. All Gmail calls go through window.gd (main process). */
 
 // ===================================================================== helpers
 const $ = (id) => document.getElementById(id);
@@ -20,6 +20,12 @@ function h(tag, props, ...kids) {
 }
 const ICONS = {
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
+  block: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
+  filter: '<path d="M3 5h18M6 12h12M10 19h4"/>',
+  translate: '<path d="M4 5h8M8 3v2M5 9c1.5 3 4 5 7 6M11 5c-1 4-3.5 7-7 9"/><path d="m13 21 4-9 4 9M14.5 18h5"/>',
+  code: '<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 4l-4 16"/>',
+  mailUnread: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/><circle cx="19" cy="5" r="3" fill="currentColor"/>',
+  print: '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>',
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9Z"/>',
   important: '<path d="M3 5h12l6 7-6 7H3l5-7Z"/>',
   send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
@@ -123,6 +129,7 @@ function popMenu(anchor, items) {
     if (it.el) { m.append(it.el); continue; }
     m.append(h('button', { role: 'menuitem', onclick: (e) => { e.stopPropagation(); closeMenus(); it.fn(); } }, it.icon ? icon(it.icon) : null, h('span', { text: it.label })));
   }
+  m._anchor = anchor; // the click that opened this menu must not close it again
   document.body.append(m);
   const r = anchor.getBoundingClientRect();
   const mw = m.offsetWidth, mh = m.offsetHeight;
@@ -131,7 +138,12 @@ function popMenu(anchor, items) {
   const first = m.querySelector('input,button'); if (first) first.focus();
   return m;
 }
-document.addEventListener('click', (e) => { if (!e.target.closest('.menu')) closeMenus(); });
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.menu')) return;
+  const open = document.querySelector('.menu');
+  if (open && open._anchor && open._anchor.contains && open._anchor.contains(e.target)) return;
+  closeMenus();
+});
 
 function modal(build) {
   const back = $('modal-back');
@@ -187,12 +199,24 @@ const S = {
   sel: new Set(), lastSelId: null, openId: null, thread: null, threadState: 'idle', threadErr: '', expanded: new Set(), showImages: new Set(),
   labels: [], comp: null, sendAs: {},
 };
+// Troubleshooting: errors in the window, and what closed a reply box, are written to Beacon's log.
+{
+  let comp = null;
+  const where = () => (new Error().stack || '').split('\n').slice(2, 7).map((x) => x.trim().replace(/^at /, '').replace(/file:\/\/\/[^ )]*\/ui\//g, '')).join(' < ');
+  Object.defineProperty(S, 'comp', {
+    get: () => comp,
+    set: (v) => { if (comp && !v && comp.inline) { try { gd.debug('reply box closed: ' + where()); } catch (_) {} } comp = v; },
+  });
+  window.addEventListener('error', (e) => { if (/ResizeObserver loop/.test(e.message || '')) return; try { gd.debug('error: ' + e.message + ' @' + String(e.filename || '').split('/').pop() + ':' + e.lineno); } catch (_) {} });
+  window.addEventListener('unhandledrejection', (e) => { try { gd.debug('error (async): ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)); } catch (_) {} });
+}
 const acctMeta = () => (S.st ? S.st.accounts.find((a) => a.id === S.acct) : null);
 
 function applyTheme() {
   const t = S.st ? S.st.settings.theme : 'dark';
   const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  document.documentElement.classList.toggle('compact', !!(S.st && S.st.settings.density === 'compact'));
   $('btn-theme').replaceChildren(icon(dark ? 'sun' : 'moon'));
   $('btn-theme').title = dark ? 'Switch to light' : 'Switch to dark';
 }

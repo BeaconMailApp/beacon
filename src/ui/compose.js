@@ -54,13 +54,60 @@ async function startReply(mode, messageId) {
   });
   renderReader();
   focusComposer(mode === 'forward' ? 'to' : 'body');
-  const el = document.getElementById('composer'); if (el) el.scrollIntoView({ block: 'nearest' });
+  revealComposer();
+}
+
+/** Keeps writing a reply draft inside its conversation, under the emails it answers. */
+async function continueDraftInline(d) {
+  const t = S.thread; if (!t || t.id !== d.threadId) return false;
+  const me = ((acctMeta() || {}).email || '').toLowerCase();
+  const list = await loadSendAs(S.acct);
+  const fromAddr = emailOf(d.from || '');
+  const from = list.find((x) => (x.sendAsEmail || '').toLowerCase() === fromAddr) || defaultFrom(list);
+  const want = String(d.inReplyTo || '').trim();
+  const src = (want && t.messages.find((m) => (m.messageIdHeader || '').trim() === want))
+    || [...t.messages].reverse().find((m) => emailOf(m.from) !== me) || t.messages[t.messages.length - 1];
+  if (!src) return false;
+  const fwd = /^fwd?:/i.test(d.subject || '');
+  S.comp = newComp({
+    mode: fwd ? 'forward' : (splitAddrs(d.cc).length ? 'replyall' : 'reply'), inline: true, threadId: t.id, sourceMessageId: src.id, draftId: d.draftId,
+    to: d.to, cc: d.cc, bcc: d.bcc, showCc: !!(d.cc || d.bcc), subject: d.subject || '', html: d.html,
+    from: from ? from.sendAsEmail : '', fromName: from ? from.displayName : '',
+    // A draft started in Gmail on the web already has the earlier email quoted inside it.
+    includeQuote: !/class=["']?gmail_quote/i.test(d.html || ''), quoteFrom: nameOf(src.from), quoteDate: fmtFullDate(src.internalDate),
+    inReplyTo: d.inReplyTo, references: d.references, loadedDraft: true, scheduledAt: d.scheduledAt || null,
+  });
+  renderReader();
+  focusComposer('body');
+  revealComposer();
+  return true;
+}
+
+/** "Continue writing" on a Draft card in a conversation. */
+async function continueDraft(draftId) {
+  await stashComposer();
+  try {
+    const d = await gd.draft(S.acct, draftId);
+    if (!(await continueDraftInline(d))) openDraftPopup(d);
+  } catch (e) { toast(e.message); }
 }
 
 async function openDraft(draftId) {
   await stashComposer();
   try {
     const d = await gd.draft(S.acct, draftId);
+    // A reply draft opens in its conversation, so the earlier emails stay in view while you write.
+    if (d.threadId && d.inReplyTo) {
+      await openThread(d.threadId);
+      if (S.thread && S.thread.id === d.threadId && S.thread.messages.some((m) => !(m.labelIds || []).includes('DRAFT')) && await continueDraftInline(d)) return;
+    }
+    openDraftPopup(d);
+  } catch (e) { toast(e.message); }
+}
+
+async function openDraftPopup(d) {
+  const draftId = d.draftId;
+  try {
     const list = await loadSendAs(S.acct);
     const from = defaultFrom(list);
     S.comp = newComp({ draftId, threadId: d.threadId, to: d.to, cc: d.cc, bcc: d.bcc, showCc: !!(d.cc || d.bcc), subject: d.subject, html: d.html, from: from ? from.sendAsEmail : '', fromName: from ? from.displayName : '', inReplyTo: d.inReplyTo, references: d.references, loadedDraft: true, scheduledAt: d.scheduledAt || null });
@@ -83,6 +130,19 @@ function renderComposerHost() {
   if (S.comp && !S.comp.inline) document.body.append(composerEl());
   if (S.comp && S.comp.inline) renderReader();
 }
+
+/** Scrolls the reply box into view, and keeps it there for a moment while the emails above it finish loading. */
+function revealComposer() {
+  const show = () => { const el = document.getElementById('composer'); if (el && el.closest('#reader')) el.scrollIntoView({ block: 'nearest' }); };
+  S.pinComposerUntil = Date.now() + 2500;
+  show(); requestAnimationFrame(show); setTimeout(show, 150);
+}
+function keepComposerInView() {
+  if (!S.pinComposerUntil || Date.now() > S.pinComposerUntil) return;
+  const el = document.getElementById('composer'); if (el && el.closest('#reader')) el.scrollIntoView({ block: 'nearest' });
+}
+// Scrolling yourself stops the reply box from being pulled back into view.
+document.addEventListener('wheel', () => { S.pinComposerUntil = 0; }, { passive: true, capture: true });
 
 function focusComposer(where) {
   setTimeout(() => {
@@ -118,8 +178,21 @@ async function stashComposer(onlyInline) {
   S.comp = null;
   document.querySelectorAll('.composer.floating').forEach((x) => x.remove());
   if (compHasContent(c) && !c.busy) {
-    try { await gd.saveDraft(c.acct, payload(c)); toast('Draft saved'); } catch (e) { toast('Could not save draft: ' + e.message); }
+    try { await gd.saveDraft(c.acct, payload(c)); toast('Draft saved'); } catch (e) { toast('Could not save draft: ' + e.message); return; }
+    // Show the saved draft as a Draft card in its conversation.
+    if (c.inline && S.openId === c.threadId) refreshOpenThread();
   }
+}
+
+/** Reloads the open conversation in place (keeps what is expanded). */
+async function refreshOpenThread() {
+  const id = S.openId; const acct = S.acct;
+  if (!id) return;
+  try {
+    const t = await gd.thread(acct, id);
+    if (S.openId !== id || S.acct !== acct) return;
+    S.thread = t; renderReader();
+  } catch (_) {}
 }
 
 function payload(c) {
@@ -247,7 +320,7 @@ function composerEl() {
     h('span', { class: 'grow' }),
     totalSize ? h('span', { class: 'tb-info', text: fmtSize(totalSize) + (totalSize > 24 * 1048576 ? ' (over 25 MB)' : '') }) : null,
     h('button', { class: 'tb text', text: 'Save draft', onclick: async () => { syncComp(); try { c.draftId = await gd.saveDraft(c.acct, payload(c)); toast('Draft saved'); } catch (e) { toast(e.message); } } }),
-    tbBtn('trash', 'Discard', async () => { const id = c.draftId; S.comp = null; if (id) gd.deleteDraft(c.acct, id).catch(() => {}); document.querySelectorAll('.composer.floating').forEach((x) => x.remove()); renderReader(); toast('Discarded'); if (S.view.kind === 'folder' && S.view.key === 'drafts') loadList({ silent: true }); }));
+    tbBtn('trash', 'Discard', async () => { const id = c.draftId; S.comp = null; if (id) { gd.deleteDraft(c.acct, id).catch(() => {}); if (S.thread && S.thread.drafts) S.thread.drafts = S.thread.drafts.filter((x) => x.draftId !== id); } document.querySelectorAll('.composer.floating').forEach((x) => x.remove()); renderReader(); toast('Discarded'); if (S.view.kind === 'folder' && S.view.key === 'drafts') loadList({ silent: true }); }));
 
   const sched = c.scheduledAt ? h('div', { class: 'c-sched' }, icon('clock'), h('span', { text: 'Scheduled to send ' + fmtWhen(c.scheduledAt) + '. Edits you make are sent then.' }),
     h('button', { class: 'linkish', text: 'Cancel schedule', onclick: async () => {
