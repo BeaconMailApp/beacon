@@ -1,5 +1,5 @@
 'use strict';
-// Packages src/ into "Gmail Desk Builds\Gmail-Desk-<version>-Windows\Gmail Desk" (outside OneDrive),
+// Packages src/ into "Beacon Builds\Beacon-<version>-Windows\Beacon" (outside OneDrive),
 // checks every file arrived, writes a file list the updater checks, zips it, and copies the zip
 // into dist\. Run: npm run build
 //
@@ -14,7 +14,7 @@ const { packager } = require('@electron/packager');
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 const DIST = path.join(ROOT, 'dist');
-const BUILDS = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Gmail Desk Builds');
+const BUILDS = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Beacon Builds');
 const pkg = require(path.join(SRC, 'package.json'));
 const ELECTRON = require(path.join(ROOT, 'node_modules', 'electron', 'package.json')).version;
 const LEFT_OUT = new Set(['mock.js']); // test mode only
@@ -48,8 +48,8 @@ async function zipWithRetry(zip, cwd, folder) {
 }
 
 (async () => {
-  if (!fs.existsSync(path.join(SRC, 'client.json'))) throw new Error('src/client.json (the Google login key) is missing. Copy it from the installed app first.');
-  const name = 'Gmail-Desk-' + pkg.version + '-Windows';
+  if (!fs.existsSync(path.join(SRC, 'client.json'))) console.log('No src/client.json: this build asks for a Google key file on first start.');
+  const name = 'Beacon-' + pkg.version + '-Windows';
   const outDir = path.join(BUILDS, name);
   const zip = outDir + '.zip';
   fs.rmSync(outDir, { recursive: true, force: true });
@@ -77,7 +77,7 @@ async function zipWithRetry(zip, cwd, folder) {
   const bad = Object.keys(want).filter((f) => !LEFT_OUT.has(f) && got[f] !== want[f]);
   if (bad.length) throw new Error('Build is missing or changed ' + bad.length + ' file(s): ' + bad.slice(0, 5).join(', '));
 
-  const readme = fs.readFileSync(path.join(ROOT, 'READ ME FIRST.txt'), 'utf8').replace(/^Gmail Desk [\d.]+/, 'Gmail Desk ' + pkg.version);
+  const readme = fs.readFileSync(path.join(ROOT, 'READ ME FIRST.txt'), 'utf8').replace(/^Beacon [\d.]+/, 'Beacon ' + pkg.version);
   fs.writeFileSync(path.join(appDir, 'READ ME FIRST.txt'), readme);
   // The updater refuses a copy whose files do not match this list.
   const files = listFiles(appDir);
