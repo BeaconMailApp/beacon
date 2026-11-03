@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('gd', {
   draft: (id, draftId) => call('draft', id, draftId),
   deleteDraft: (id, draftId) => call('draft-delete', id, draftId),
   sendAs: (id) => call('send-as', id),
+  signatureSave: (id, email, html) => call('signature-save', id, email, html),
   action: (id, threadIds, action, extra) => call('action', id, threadIds, action, extra),
   actionAll: (id, query, action) => call('action-all', id, query, action),
   actionAllUndo: (token) => call('action-all-undo', token),

@@ -171,6 +171,8 @@ class Account {
 
   // ---------- sending ----------
   sendAs() { return this.api('GET', 'settings/sendAs').then((r) => r.sendAs || []).catch(() => []); }
+  /** Changes the signature Gmail keeps for one of your addresses (needs the basic mail settings permission). */
+  updateSignature(email, signature) { return this.api('PATCH', 'settings/sendAs/' + encodeURIComponent(email), { body: { signature } }); }
   sendRaw(raw, threadId) { return this.api('POST', 'messages/send', { body: threadId ? { raw, threadId } : { raw } }); }
   createDraft(raw, threadId) { return this.api('POST', 'drafts', { body: { message: threadId ? { raw, threadId } : { raw } } }); }
   updateDraft(id, raw, threadId) { return this.api('PUT', 'drafts/' + id, { body: { id, message: threadId ? { raw, threadId } : { raw } } }); }

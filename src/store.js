@@ -25,6 +25,7 @@ const defaults = () => ({
   calView: 'week',
   alwaysImages: false,
   trustedSenders: [],
+  signatures: {}, // accountId -> {address: {onNew, onReply: same|other|none, replyHtml}}; the main signature itself lives in Gmail
   bounds: null,
   trayHintShown: false,
   scheduled: [], // schedule send: {acct, draftId, sendAt, threadId, to, subject, tries, nextTry, error, failed}

@@ -136,7 +136,8 @@ class MockAccount {
   untrashThread(id) { return this.modifyThread(id, ['INBOX'], ['TRASH']); }
   async deleteThreadForever(id) { this.s.threads = this.s.threads.filter((t) => t.id !== id); }
   async createLabel(name) { const l = { id: 'Label_' + Date.now(), name, type: 'user' }; this.s.labels.push(l); return l; }
-  async sendAs() { return [{ sendAsEmail: this.meta.email, displayName: 'Lawrence Rank', isDefault: true, isPrimary: true, signature: '<div>Lawrence Rank<br>(555) 010-0000</div><img src="x" onerror="window.__pwned=1">' }]; }
+  async sendAs() { return [{ sendAsEmail: this.meta.email, displayName: 'Lawrence Rank', isDefault: true, isPrimary: true, signature: this.sig !== undefined ? this.sig : '<div>Lawrence Rank<br>(555) 010-0000</div><img src="x" onerror="window.__pwned=1">' }]; }
+  async updateSignature(email, signature) { if (!this.canFilter()) { const e = new Error('Insufficient Permission'); e.code = 'scope'; e.status = 403; throw e; } this.sig = signature; return { sendAsEmail: email, signature }; }
   async sendRaw(raw, threadId) {
     const txt = mime.fromB64url(raw).toString('utf8');
     this.lastSent = txt;

@@ -20,6 +20,14 @@ function h(tag, props, ...kids) {
 }
 const ICONS = {
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
+  fontAa: '<path d="M3 18 8 6l5 12M4.6 14h6.8"/><path d="M15 18v-1.2M21 18v-6a3 3 0 0 0-5.6-1.5"/><circle cx="18" cy="15.5" r="2.6"/>',
+  textColor: '<path d="M6 16 11 4h2l5 12M8 12h8"/><path d="M4 20h16" stroke-width="3"/>',
+  strike: '<path d="M4 12h16M16 6.5C15 5 13.6 4.5 12 4.5 9.5 4.5 8 6 8 7.6c0 1.4 1 2.4 3 3M8.5 17c1 1.6 2.4 2.5 4 2.5 2.6 0 4-1.5 4-3.3 0-1-.4-1.8-1.2-2.4"/>',
+  alignLeft: '<path d="M4 6h16M4 10h10M4 14h16M4 18h10"/>',
+  alignCenter: '<path d="M4 6h16M7 10h10M4 14h16M7 18h10"/>',
+  alignRight: '<path d="M4 6h16M10 10h10M4 14h16M10 18h10"/>',
+  indent: '<path d="M4 6h16M11 10h9M11 14h9M4 18h16M4 9l3 3-3 3"/>',
+  outdent: '<path d="M4 6h16M11 10h9M11 14h9M4 18h16M7 9l-3 3 3 3"/>',
   block: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   filter: '<path d="M3 5h18M6 12h12M10 19h4"/>',
   translate: '<path d="M4 5h8M8 3v2M5 9c1.5 3 4 5 7 6M11 5c-1 4-3.5 7-7 9"/><path d="m13 21 4-9 4 9M14.5 18h5"/>',

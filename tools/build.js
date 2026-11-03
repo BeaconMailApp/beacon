@@ -3,6 +3,9 @@
 // checks every file arrived, writes a file list the updater checks, zips it, and copies the zip
 // into dist\. Run: npm run build
 //
+// npm run build:public makes the copy for GitHub instead: it leaves out src/client.json (your
+// Google key), uses publish\READ ME FIRST (public).txt, and puts the zip in publish\, not dist\.
+//
 // Why outside OneDrive: when a folder is deleted and made again under the same name, OneDrive can
 // replay the old delete over the new files, which left earlier builds with files missing.
 const fs = require('fs');
@@ -13,11 +16,13 @@ const { packager } = require('@electron/packager');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
-const DIST = path.join(ROOT, 'dist');
-const BUILDS = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Beacon Builds');
+const PUBLIC = process.argv.includes('--public');
+const DIST = path.join(ROOT, PUBLIC ? 'publish' : 'dist');
+const BUILDS = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Beacon Builds', ...(PUBLIC ? ['public'] : []));
 const pkg = require(path.join(SRC, 'package.json'));
 const ELECTRON = require(path.join(ROOT, 'node_modules', 'electron', 'package.json')).version;
 const LEFT_OUT = new Set(['mock.js']); // test mode only
+if (PUBLIC) LEFT_OUT.add('client.json'); // your Google key never goes public
 
 /** Every file under dir as {"relative/path": size}. */
 function listFiles(dir) {
@@ -48,7 +53,7 @@ async function zipWithRetry(zip, cwd, folder) {
 }
 
 (async () => {
-  if (!fs.existsSync(path.join(SRC, 'client.json'))) console.log('No src/client.json: this build asks for a Google key file on first start.');
+  if (!PUBLIC && !fs.existsSync(path.join(SRC, 'client.json'))) console.log('No src/client.json: this build asks for a Google key file on first start.');
   const name = 'Beacon-' + pkg.version + '-Windows';
   const outDir = path.join(BUILDS, name);
   const zip = outDir + '.zip';
@@ -77,10 +82,11 @@ async function zipWithRetry(zip, cwd, folder) {
   const bad = Object.keys(want).filter((f) => !LEFT_OUT.has(f) && got[f] !== want[f]);
   if (bad.length) throw new Error('Build is missing or changed ' + bad.length + ' file(s): ' + bad.slice(0, 5).join(', '));
 
-  const readme = fs.readFileSync(path.join(ROOT, 'READ ME FIRST.txt'), 'utf8').replace(/^Beacon [\d.]+/, 'Beacon ' + pkg.version);
+  const readme = fs.readFileSync(PUBLIC ? path.join(ROOT, 'publish', 'READ ME FIRST (public).txt') : path.join(ROOT, 'READ ME FIRST.txt'), 'utf8').replace(/^Beacon [\d.]+/, 'Beacon ' + pkg.version);
   fs.writeFileSync(path.join(appDir, 'READ ME FIRST.txt'), readme);
   // The updater refuses a copy whose files do not match this list.
   const files = listFiles(appDir);
+  if (PUBLIC && Object.keys(files).some((f) => /(^|\/)client\.json$/.test(f))) throw new Error('client.json got into the public build. Stopping.');
   fs.writeFileSync(path.join(appFiles, 'manifest.json'), JSON.stringify({ version: pkg.version, files }));
 
   await zipWithRetry(zip, outDir, pkg.productName);

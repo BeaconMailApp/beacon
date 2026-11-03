@@ -81,6 +81,7 @@ function settingsModal() {
       sw('primaryOnly', 'Count Primary only', 'The unread number ignores Promotions, Social and Updates'),
       sw('alwaysImages', 'Always show pictures in emails', 'When off, pictures load only when you ask (blocks tracking pixels)'),
       h('div', { class: 'set-row' }, h('div', { class: 'lbl' }, 'Undo send', h('small', { text: 'How long you have to take a sent email back' })), undo),
+      st.accounts.length ? h('div', { class: 'set-row' }, h('div', { class: 'lbl' }, 'Signature', h('small', { text: 'Change your signature, and pick one for new emails and for replies' })), h('button', { class: 'btn', text: 'Edit', onclick: () => { close(); signatureModal(); } })) : null,
       sw('startup', 'Start with Windows', st.installed ? 'Opens quietly in the tray when you sign in to Windows' : 'Available after you install Beacon', !st.installed),
       h('h2', { text: 'Accounts', style: 'margin-top:18px;font-size:16px' }), ...accts,
       h('div', { class: 'modal-actions', style: 'justify-content:flex-start' },

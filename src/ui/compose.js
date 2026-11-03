@@ -20,7 +20,7 @@ async function startCompose(fields) {
   await stashComposer();
   const list = await loadSendAs(S.acct);
   const from = defaultFrom(list);
-  S.comp = newComp(Object.assign({ from: from ? from.sendAsEmail : '', fromName: from ? from.displayName : '', sigHtml: from ? from.signature || '' : '' }, fields || {}));
+  S.comp = newComp(Object.assign({ from: from ? from.sendAsEmail : '', fromName: from ? from.displayName : '', sigHtml: pickSig(S.acct, from, 'new') }, fields || {}));
   if (S.comp.showCc === false && (S.comp.cc || S.comp.bcc)) S.comp.showCc = true;
   renderComposerHost();
   focusComposer(S.comp.to ? 'body' : 'to');
@@ -49,7 +49,7 @@ async function startReply(mode, messageId) {
   S.comp = newComp({
     mode, inline: true, threadId: t.id, sourceMessageId: src.id,
     to, cc, showCc: !!cc, subject: mode === 'forward' ? 'Fwd: ' + (src.subject || '').replace(/^(fwd?:\s*)+/i, '') : '',
-    from: from ? from.sendAsEmail : '', fromName: from ? from.displayName : '', sigHtml: from ? from.signature || '' : '',
+    from: from ? from.sendAsEmail : '', fromName: from ? from.displayName : '', sigHtml: pickSig(S.acct, from, mode),
     forwardAtts: mode === 'forward' ? src.attachments.slice() : [], quoteFrom: nameOf(src.from), quoteDate: fmtFullDate(src.internalDate),
   });
   renderReader();
@@ -132,14 +132,39 @@ function renderComposerHost() {
 }
 
 /** Scrolls the reply box into view, and keeps it there for a moment while the emails above it finish loading. */
+// The reply box is docked to the bottom of the reading pane, so the emails scroll behind it while you
+// write. Opening it scrolls to the end of the conversation, so the email you are answering sits just above.
+function showConversationEnd() { const box = document.getElementById('reader'); if (box && document.getElementById('composer')) box.scrollTop = box.scrollHeight; }
 function revealComposer() {
-  const show = () => { const el = document.getElementById('composer'); if (el && el.closest('#reader')) el.scrollIntoView({ block: 'nearest' }); };
   S.pinComposerUntil = Date.now() + 2500;
-  show(); requestAnimationFrame(show); setTimeout(show, 150);
+  showConversationEnd(); requestAnimationFrame(showConversationEnd); setTimeout(showConversationEnd, 150);
 }
 function keepComposerInView() {
   if (!S.pinComposerUntil || Date.now() > S.pinComposerUntil) return;
-  const el = document.getElementById('composer'); if (el && el.closest('#reader')) el.scrollIntoView({ block: 'nearest' });
+  showConversationEnd();
+}
+
+// Drag the top edge of the docked reply box to make it taller or shorter. Remembered on this computer.
+const DOCK_KEY = 'beacon.replyHeight';
+function dockHeight() { try { return parseInt(localStorage.getItem(DOCK_KEY), 10) || 0; } catch (_) { return 0; } }
+function dockGrip(el) {
+  const grip = h('div', { class: 'c-grip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Resize reply box', title: 'Drag to resize. Double click to reset.', tabindex: '0' });
+  const pane = () => document.getElementById('reader');
+  const clamp = (px) => { const max = Math.max(260, (pane() ? pane().clientHeight : 600) - 120); return Math.round(Math.max(220, Math.min(px, max))); };
+  const set = (px, save) => { el.style.height = px ? clamp(px) + 'px' : ''; if (save) { try { if (px) localStorage.setItem(DOCK_KEY, String(clamp(px))); else localStorage.removeItem(DOCK_KEY); } catch (_) {} } };
+  let startY = 0; let startH = 0; let dragging = false;
+  // The move and release listeners only exist while dragging, so redrawing the reply box leaves nothing behind.
+  const move = (e) => { if (dragging) set(startH + (startY - e.clientY), false); };
+  const end = () => { if (!dragging) return; dragging = false; document.body.classList.remove('resizing-v'); set(el.offsetHeight, true); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); };
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); dragging = true; startY = e.clientY; startH = el.offsetHeight; document.body.classList.add('resizing-v');
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+  });
+  grip.addEventListener('dblclick', () => set(0, true));
+  grip.addEventListener('keydown', (e) => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); set(el.offsetHeight + (e.key === 'ArrowUp' ? 30 : -30), true); } });
+  const saved = dockHeight(); if (saved) setTimeout(() => set(saved, false), 0);
+  return grip;
 }
 // Scrolling yourself stops the reply box from being pulled back into view.
 document.addEventListener('wheel', () => { S.pinComposerUntil = 0; }, { passive: true, capture: true });
@@ -216,9 +241,15 @@ function composerEl() {
     const sel = h('select', { id: 'c-from', 'aria-label': 'From', onchange: (e) => {
       syncComp();
       const f = list.find((x) => x.sendAsEmail === e.target.value);
-      const oldSig = c.sigHtml; c.from = f.sendAsEmail; c.fromName = f.displayName; c.sigHtml = f.signature || '';
+      c.from = f.sendAsEmail; c.fromName = f.displayName; c.sigHtml = pickSig(c.acct, f, c.mode);
+      // Swap in the signature for the new address (or take it out if that address has none here).
       const ed = document.getElementById('c-editor'); const sigEl = ed && ed.querySelector('.sig');
-      if (sigEl) { sigEl.replaceChildren(safeFragment(c.sigHtml)); } else if (oldSig !== c.sigHtml) { /* none */ }
+      if (ed) {
+        if (sigEl && c.sigHtml) sigEl.replaceWith(sigBlock(c.sigHtml));
+        else if (sigEl) sigEl.remove();
+        else if (c.sigHtml) ed.append(sigBlock(c.sigHtml));
+        c.html = ed.innerHTML;
+      }
     } }, ...list.map((x) => h('option', { value: x.sendAsEmail, selected: x.sendAsEmail === c.from, text: (x.displayName ? x.displayName + ' <' + x.sendAsEmail + '>' : x.sendAsEmail) })));
     fields.push(h('div', { class: 'c-field' }, h('label', { for: 'c-from', text: 'From' }), sel));
   }
@@ -238,7 +269,7 @@ function composerEl() {
   if (c.html) editor.append(safeFragment(c.html));
   else {
     editor.append(h('div', {}, h('br')));
-    if (c.sigHtml) { editor.append(h('div', {}, h('br'))); const sig = h('div', { class: 'sig' }); sig.append(h('div', { text: '-- ' }), safeFragment(c.sigHtml)); editor.append(sig); }
+    if (c.sigHtml) editor.append(h('div', {}, h('br')), sigBlock(c.sigHtml));
   }
   editor.addEventListener('input', () => { c.dirty = true; });
   editor.addEventListener('paste', async (e) => {
@@ -294,10 +325,13 @@ function composerEl() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); insertLink(); }
   });
 
-  const fmt = h('div', { class: 'fmt' },
+  const aa = h('button', { class: 'fmt-aa' + (fmtBarShown() ? ' on' : ''), title: 'Formatting options: font, size, colors, alignment', 'aria-label': 'Formatting options', onmousedown: (e) => e.preventDefault(), onclick: () => toggleFmtBar(aa) }, icon('fontAa'));
+  const fbar = formatBar(); fbar.hidden = !fmtBarShown();
+  const fmt = h('div', { class: 'fmt' }, aa,
     fmtBtn('bold', 'Bold (Ctrl+B)', () => document.execCommand('bold')),
     fmtBtn('italic', 'Italic (Ctrl+I)', () => document.execCommand('italic')),
     fmtBtn('underline', 'Underline (Ctrl+U)', () => document.execCommand('underline')),
+    h('button', { class: 'fmt-color', title: 'Text and background color', 'aria-label': 'Text and background color', onmousedown: (e) => e.preventDefault(), onclick: (e) => colorPopup(e.currentTarget) }, icon('textColor')),
     fmtBtn('link', 'Link (Ctrl+K)', insertLink),
     fmtBtn('ul', 'Bulleted list', () => document.execCommand('insertUnorderedList')),
     fmtBtn('ol', 'Numbered list', () => document.execCommand('insertOrderedList')),
@@ -327,7 +361,8 @@ function composerEl() {
       try { await gd.cancelSchedule(c.acct, c.draftId); c.scheduledAt = null; rerender(); toast('Schedule cancelled. The email is still in Drafts.'); gd.state().then((st) => { S.st = st; renderSide(); }); if (S.view.kind === 'folder' && S.view.key === 'scheduled') loadList({ silent: true }); }
       catch (e) { toast(e.message); }
     } })) : null;
-  const el = h('section', { id: 'composer', class: 'composer' + (c.inline ? '' : ' floating') + (c.max ? ' max' : ''), 'aria-label': titles[c.mode] }, head, sched, ...fields, editor, quote, files, c.err ? h('div', { class: 'c-err', role: 'alert', text: c.err }) : null, foot);
+  const el = h('section', { id: 'composer', class: 'composer' + (c.inline ? ' docked' : ' floating') + (c.max ? ' max' : ''), 'aria-label': titles[c.mode] }, head, sched, ...fields, editor, quote, files, c.err ? h('div', { class: 'c-err', role: 'alert', text: c.err }) : null, fbar, foot);
+  if (c.inline) el.prepend(dockGrip(el));
   // Drag files from Explorer onto the composer to attach them.
   const handleDragOver = (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {

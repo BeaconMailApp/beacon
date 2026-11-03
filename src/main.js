@@ -422,7 +422,7 @@ function publicState() {
   return {
     accounts: s.accounts.map((a) => ({ id: a.id, email: a.email, name: a.name, color: a.color, needsAuth: !!a.needsAuth, calendar: calendarConnected(a.id) })),
     active: s.active, counts: Object.assign({}, counts),
-    settings: { theme: s.theme, darkEmails: s.darkEmails, notify: s.notify, primaryOnly: s.primaryOnly, startup: s.startup && win32.isInstalled(), undoSeconds: s.undoSeconds, importantAlerts: !!s.importantAlerts, alwaysImages: s.alwaysImages, trustedSenders: s.trustedSenders, calHidden: s.calHidden || {}, calView: s.calView || 'week', density: s.density === 'compact' ? 'compact' : 'comfortable' },
+    settings: { theme: s.theme, darkEmails: s.darkEmails, notify: s.notify, primaryOnly: s.primaryOnly, startup: s.startup && win32.isInstalled(), undoSeconds: s.undoSeconds, importantAlerts: !!s.importantAlerts, alwaysImages: s.alwaysImages, trustedSenders: s.trustedSenders, calHidden: s.calHidden || {}, calView: s.calView || 'week', signatures: s.signatures || {}, density: s.density === 'compact' ? 'compact' : 'comfortable' },
     later: later.publicInfo(),
     installed: win32.isInstalled(), version: app.getVersion(), hasClient: !!client(), mock: MOCK, platform: process.platform, projectId: projectId(),
   };
@@ -436,11 +436,30 @@ function setSettings(patch) {
   const s = store.get();
   const allowed = ['theme', 'darkEmails', 'notify', 'importantAlerts', 'primaryOnly', 'startup', 'undoSeconds', 'alwaysImages', 'trustedSenders', 'calHidden', 'calView', 'density'];
   for (const k of allowed) if (k in patch) s[k] = patch[k];
+  if ('signatures' in patch) s.signatures = cleanSignatures(patch.signatures);
   if ('theme' in patch) applyTheme();
   if ('startup' in patch) win32.applyStartup(s.startup);
   if ('primaryOnly' in patch) setTimeout(pollAll, 200);
   store.save();
   sendState();
+}
+
+/** Keeps only the signature choices Beacon understands, with sensible sizes. */
+function cleanSignatures(v) {
+  const out = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const [acct, addrs] of Object.entries(v)) {
+    if (!addrs || typeof addrs !== 'object') continue;
+    for (const [addr, p] of Object.entries(addrs)) {
+      if (!p || typeof p !== 'object') continue;
+      (out[String(acct)] = out[String(acct)] || {})[String(addr).toLowerCase().slice(0, 320)] = {
+        onNew: p.onNew !== false,
+        onReply: ['same', 'other', 'none'].includes(p.onReply) ? p.onReply : 'same',
+        replyHtml: String(p.replyHtml || '').slice(0, 10000),
+      };
+    }
+  }
+  return out;
 }
 
 function parseMailto(u) {
@@ -866,6 +885,18 @@ handle('thread', async (id, threadId) => {
 handle('draft', async (id, draftId) => { const d = await accountObj(id).getDraft(draftId); const x = later.scheduleFor(id, draftId); if (x) d.scheduledAt = x.sendAt; return d; });
 handle('draft-delete', async (id, draftId) => { await accountObj(id).deleteDraft(draftId); later.dropDraft(id, draftId); });
 handle('send-as', (id) => accountObj(id).sendAs());
+// Signatures are saved in Gmail, so the web and the phone use the same one.
+handle('signature-save', async (id, email, html) => {
+  const a = accountObj(id);
+  const scopeErr = () => { const e = new Error('Beacon needs one more Google permission to save your signature in Gmail.'); e.code = 'settings_scope'; return e; };
+  if (a.canFilter && !a.canFilter()) throw scopeErr();
+  const sig = String(html || '');
+  if (sig.length > 10000) throw new Error('That signature is too long for Gmail (10,000 characters at most, pictures count).');
+  try { await a.updateSignature(String(email || ''), sig); }
+  catch (e) { if (e.code === 'scope') throw scopeErr(); throw e; }
+  log('signature saved', sig ? sig.length + ' chars' : 'cleared');
+  return true;
+});
 handle('refresh-counts', () => pollAll());
 
 const ACTIONS = {

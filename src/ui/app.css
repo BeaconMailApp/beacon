@@ -181,6 +181,13 @@ body.resizing iframe { pointer-events: none; }
 
 /* compose */
 .composer { margin: 0 24px 24px 76px; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); background: var(--panel); display: flex; flex-direction: column; overflow: hidden; }
+.composer.docked { position: sticky; bottom: 0; z-index: 4; margin: 8px 16px 0; height: 46%; min-height: 220px; border-radius: 14px 14px 0 0; border-bottom: 0; box-shadow: 0 -10px 28px rgba(0, 0, 0, .28); }
+.composer.docked .c-editor { min-height: 60px; }
+.c-grip { height: 8px; flex: none; cursor: row-resize; position: relative; background: var(--raise); touch-action: none; outline: none; }
+.c-grip::after { content: ""; position: absolute; left: 50%; top: 3px; width: 40px; height: 3px; border-radius: 3px; background: var(--line); transform: translateX(-50%); transition: background .15s, width .15s; }
+.c-grip:hover::after, .c-grip:focus-visible::after { background: var(--accent); width: 64px; }
+body.resizing-v { cursor: row-resize; user-select: none; }
+body.resizing-v iframe { pointer-events: none; }
 .composer.floating { position: fixed; right: 24px; bottom: 0; width: min(620px, calc(100vw - 48px)); height: min(640px, calc(100vh - 60px)); margin: 0; border-radius: 14px 14px 0 0; z-index: 30; }
 .composer.floating.max { width: min(1000px, calc(100vw - 80px)); height: calc(100vh - 60px); right: 40px; }
 .c-head { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 16px; background: var(--raise); font-weight: 600; font-size: 13px; }
@@ -210,6 +217,21 @@ body.resizing iframe { pointer-events: none; }
 .fmt button { border: 0; background: none; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; color: var(--muted); font-weight: 700; display: grid; place-items: center; }
 .fmt button:hover { background: var(--hover); color: var(--fg); }
 .fmt svg { width: 17px; height: 17px; }
+.fmt .fmt-aa.on { background: var(--hover); color: var(--accent); }
+.fmt-bar { display: flex; align-items: center; gap: 2px; padding: 6px 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.fmt-bar[hidden] { display: none; }
+.fmt-bar .tb-sep { margin: 0 4px; }
+.fb-sel { height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; max-width: 140px; }
+.fb-sel option { color: var(--fg); background: var(--panel); }
+.fb-btn { border: 0; background: none; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; color: var(--muted); display: grid; place-items: center; }
+.fb-btn:hover { background: var(--hover); color: var(--fg); }
+.fb-btn svg { width: 17px; height: 17px; }
+.menu.cp-menu { min-width: 0; padding: 10px; }
+.cp { display: flex; gap: 16px; }
+.cp-lbl { font-size: 12px; color: var(--muted); margin: 0 0 6px 2px; }
+.cp-grid { display: grid; grid-template-columns: repeat(8, 18px); gap: 3px; }
+.menu .cp-sw { display: block; width: 18px; height: 18px; padding: 0; border-radius: 3px; border: 1px solid rgba(0,0,0,.12); }
+.menu .cp-sw:hover, .menu .cp-sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .dropzone { position: relative; outline: 2px dashed var(--accent) !important; outline-offset: -4px; }
 .dropzone::after {
   content: '📎 Drop files here to attach';
@@ -486,3 +508,16 @@ body.resizing iframe { pointer-events: none; }
 .welcome .card.setup { max-width: 620px; text-align: left; }
 .welcome .card.setup ol li { margin-bottom: 12px; }
 .welcome .card.setup ol li > div { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Signature window (Settings > Signature) */
+.sig-modal { width: min(620px, 100%); }
+.sig-lbl { margin: 14px 0 6px; font-weight: 600; }
+.sig-lbl small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.sig-box { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }
+.sig-box:focus-within { border-color: var(--accent); }
+.sig-fmt { padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.sig-link { display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.sig-link[hidden] { display: none; }
+.sig-link .ev-in { flex: 1; }
+.c-editor.sig-editor { min-height: 90px; max-height: 220px; flex: none; padding: 10px 12px; }
+.sig-reply { margin-bottom: 4px; }

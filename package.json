@@ -1,11 +1,12 @@
 {
-  "name": "gmail-desk-build",
+  "name": "beacon-build",
   "private": true,
   "description": "Build tools for Beacon. The app itself lives in src/.",
   "scripts": {
     "start": "electron src",
     "icons": "python tools/make-icons.py",
-    "build": "node tools/build.js"
+    "build": "node tools/build.js",
+    "build:public": "node tools/build.js --public"
   },
   "devDependencies": {
     "@electron/packager": "18.3.6",
