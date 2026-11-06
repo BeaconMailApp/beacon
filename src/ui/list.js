@@ -20,7 +20,10 @@ async function loadList(opts = {}) {
       S.threads = S.threads.concat(r.threads.filter((t) => !have.has(t.id)));
       S.next = r.nextPageToken;
       S.listState = 'ok';
+      const scroll = $('list').scrollTop;
       renderList();
+      $('list').scrollTop = scroll;
+      autoFill();
     } catch (e) {
       if (seq !== S.viewSeq) return;
       S.listState = 'ok'; S.moreErr = e.message;
@@ -48,6 +51,7 @@ async function loadList(opts = {}) {
     return;
   }
   const seq = ++S.viewSeq;
+  S.autoFills = 0;
   S.selAll = false; S.lastSelId = null;
   S.threads = []; S.next = null; S.listState = 'loading'; S.moreErr = ''; renderList();
   try {
@@ -61,6 +65,18 @@ async function loadList(opts = {}) {
   }
   renderList();
   $('list').scrollTop = 0;
+  autoFill();
+}
+// If the list does not reach the bottom of the window yet (a short page, or a tab like Everything else
+// that only keeps part of each inbox page), load the next page right away instead of waiting for a scroll.
+function autoFill() {
+  requestAnimationFrame(() => {
+    const el = $('list');
+    if (!el.clientHeight) return; // hidden or minimized: wait for a real scroll
+    // At most a few pages in a row on its own (For You can be sparse in a big inbox); scrolling continues.
+    if ((S.autoFills || 0) >= 4) return;
+    if (S.next && S.listState === 'ok' && !S.moreErr && el.scrollHeight - el.clientHeight < 1200) { S.autoFills = (S.autoFills || 0) + 1; loadList({ more: true }); }
+  });
 }
 
 function moreRow() {
@@ -74,11 +90,15 @@ function renderMoreRow() {
   if (old && fresh) old.replaceWith(fresh); else if (old) old.remove(); else if (fresh) $('list').append(fresh);
   renderToolbar();
 }
-// Keep loading older mail as you scroll down, like Gmail.
+// Keep loading older mail as you scroll down, like Gmail. It starts well before the bottom so the
+// next page is usually there by the time you reach it.
 $('list').addEventListener('scroll', () => {
   const el = $('list');
-  if (S.next && S.listState === 'ok' && !S.moreErr && el.scrollTop + el.clientHeight > el.scrollHeight - 400) loadList({ more: true });
+  if (S.next && S.listState === 'ok' && !S.moreErr && el.scrollTop + el.clientHeight > el.scrollHeight - 1500) loadList({ more: true });
 });
+// Any scrolling you do yourself lets the list fill itself again.
+for (const ev of ['wheel', 'pointerdown', 'touchmove']) $('list').addEventListener(ev, () => { S.autoFills = 0; }, { passive: true });
+document.addEventListener('keydown', () => { S.autoFills = 0; });
 
 function renderTabs() {
   const tabs = $('tabs');
@@ -129,14 +149,14 @@ function renderToolbar() {
     if (inTrash || inSpam) kids.push(h('span', { class: 'tb-info', style: 'margin-left:6px', text: inTrash ? 'Items in Trash are deleted by Gmail after 30 days.' : 'Spam is deleted by Gmail after 30 days.' }));
   }
   if (!all) S.selAll = false;
-  const info = S.selAll ? 'Every conversation in ' + viewTitle() + ' selected' : n ? n + ' selected' : ((S.listState === 'ok' || S.listState === 'more') && S.threads.length ? S.threads.length.toLocaleString() + (S.next ? '+ conversations' : ' conversations') : '');
+  const info = S.selAll ? 'Every conversation in ' + viewAllName() + ' selected' : n ? n + ' selected' : ((S.listState === 'ok' || S.listState === 'more') && S.threads.length ? S.threads.length.toLocaleString() + (S.next ? '+ conversations' : ' conversations') : '');
   kids.push(h('span', { class: 'tb-info', text: info }));
   // Gmail-style: after "select all", offer every conversation in the view, not only the loaded ones.
-  const canAll = all && S.next && !inDrafts && !inTrash && !inSpam && S.view.kind !== 'cleanup' && !viewQuery().forYou;
+  const canAll = all && S.next && !inDrafts && !inTrash && !inSpam && S.view.kind !== 'cleanup';
   if (canAll || S.selAll) {
     kids.push(h('div', { class: 'selall-bar' }, S.selAll
-      ? [h('span', { text: 'All conversations in ' + viewTitle() + ' are selected, not only the ' + S.threads.length + ' shown.' }), h('button', { class: 'linkish', text: 'Clear selection', onclick: () => { S.selAll = false; S.sel.clear(); renderList(); } })]
-      : [h('span', { text: 'All ' + S.threads.length + ' conversations on screen are selected.' }), h('button', { class: 'linkish', text: 'Select every conversation in ' + viewTitle(), onclick: () => { S.selAll = true; renderToolbar(); } })]));
+      ? [h('span', { text: 'All conversations in ' + viewAllName() + ' are selected, not only the ' + S.threads.length + ' shown.' }), h('button', { class: 'linkish', text: 'Clear selection', onclick: () => { S.selAll = false; S.sel.clear(); renderList(); } })]
+      : [h('span', { text: 'All ' + S.threads.length + ' conversations on screen are selected.' }), h('button', { class: 'linkish', text: 'Select every conversation in ' + viewAllName(), onclick: () => { S.selAll = true; renderToolbar(); } })]));
   }
   tb.replaceChildren(...kids);
 }
@@ -301,7 +321,51 @@ async function teach(ids, important) {
 }
 
 // Every conversation in the current view, using the whole search on Gmail's side (not just loaded rows).
+/** The view's name for "every conversation in ...": the Inbox tab you are on, like Everything else. */
+function viewAllName() {
+  if (S.view.kind === 'folder' && S.view.key === 'inbox') return (TABS.find((t) => t.key === (S.view.tab || 'foryou')) || {}).label || 'Inbox';
+  return viewTitle();
+}
+
+// For You and Everything else are Beacon's own sorting, not a Gmail search: Beacon first reads the
+// whole Inbox to find that tab's conversations (with a Stop button), then changes them in one go.
+let sideProgress = null;
+gd.onForYouProgress((p) => { if (sideProgress && p.accountId === S.acct) sideProgress(p); });
+async function actAllSide(action, side) {
+  const name = viewAllName(); const acctId = S.acct;
+  let stopped = false;
+  const line = (p) => 'Finding every conversation in ' + name + '… ' + p.scanned.toLocaleString() + ' checked, ' + p.found.toLocaleString() + ' found';
+  toast(line({ scanned: 0, found: 0 }), 'Stop', () => { stopped = true; sideProgress = null; gd.forYouCancel(); toast('Stopped. Nothing was changed.'); }, 600000);
+  // Only the words change while it works, so the Stop button stays put and is easy to click.
+  const words = $('toast').firstChild;
+  sideProgress = (p) => { if (words && words.isConnected) words.textContent = line(p); };
+  let scan;
+  try { scan = await gd.forYouScan(acctId, side); }
+  catch (e) { sideProgress = null; toast('Could not do that: ' + e.message, null, null, 10000); return; }
+  sideProgress = null;
+  if (stopped || scan.cancelled) return;
+  if (!scan.count) { toast('There is nothing in ' + name + ' right now.'); return; }
+  const n = scan.count.toLocaleString() + (scan.count === 1 ? ' conversation' : ' conversations');
+  const capped = scan.capped ? ' Beacon looked at the newest 20,000 conversations in your Inbox.' : '';
+  if (action === 'trash' || action === 'spam') {
+    const a = await confirmBox((action === 'trash' ? 'Delete ' : 'Report as spam ') + n + ' in ' + name + '?', (action === 'trash' ? 'They go to Trash. Gmail keeps Trash for 30 days, so you can still get them back.' : 'They move to Spam.') + capped, action === 'trash' ? 'Delete' : 'Report spam', { danger: true });
+    if (!a.ok) return;
+  }
+  toast((PROGRESS_MSG[action] || 'Working on') + ' ' + n + ' in ' + name + '…', null, null, 300000);
+  try {
+    const r = await gd.forYouApply(scan.token, action);
+    S.selAll = false; S.lastSelId = null; S.sel.clear();
+    const msg = (DONE_MSG[action] || 'Done') + ' ' + r.count.toLocaleString() + (r.count === 1 ? ' conversation' : ' conversations');
+    if (r.undo) toast(msg, 'Undo', async () => { try { await gd.actionAllUndo(r.undo); toast('Undone'); loadList(); } catch (e) { toast(e.message); } }, 12000);
+    else toast(msg + (capped ? '.' + capped : ''), null, null, capped ? 10000 : 4000);
+    if (acctId === S.acct) loadList();
+    gd.refreshCounts();
+  } catch (e) { toast('Could not do that: ' + e.message, null, null, 10000); }
+}
+
 async function actAll(action) {
+  const side = viewQuery().forYou;
+  if (side) return actAllSide(action, side);
   const name = viewTitle() + (S.view.kind === 'folder' && S.view.key === 'inbox' ? ' (' + (TABS.find((t) => t.key === (S.view.tab || 'foryou')) || {}).label + ')' : '');
   if (action === 'trash' || action === 'spam') {
     const a = await confirmBox((action === 'trash' ? 'Delete' : 'Report as spam') + ' every conversation in ' + name + '?', action === 'trash' ? 'All of them go to Trash, not only the ones loaded on screen. Gmail keeps Trash for 30 days, so you can still get them back.' : 'All of them move to Spam, not only the ones loaded on screen.', action === 'trash' ? 'Delete all' : 'Report all', { danger: true });

@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFileSync, spawn } = require('child_process');
+const { removeTree, clearReadOnly } = require('./fsutil');
 
 const APP_NAME = 'Beacon'; // install folder, program file and saved-data folder
 const LEGACY_NAME = 'Gmail Desk'; // the name before 2.9.0; its folders are moved or removed
@@ -47,7 +48,7 @@ function migrateData() {
   const until = Date.now() + 4000;
   for (;;) {
     try {
-      if (fs.existsSync(fresh)) fs.rmSync(fresh, { recursive: true, force: true }); // an empty folder made by an earlier start
+      if (fs.existsSync(fresh)) removeTree(fresh); // an empty folder made by an earlier start
       fs.renameSync(old, fresh);
       return;
     } catch (_) {
@@ -99,11 +100,12 @@ function install({ args = [] } = {}) {
     killOthers();
     const deadline = Date.now() + 8000;
     for (;;) {
-      try { fs.rmSync(INSTALL_DIR, { recursive: true, force: true }); break; }
+      try { removeTree(INSTALL_DIR); break; }
       catch (e) { if (Date.now() > deadline) throw e; execFileSync('cmd.exe', ['/c', 'ping 127.0.0.1 -n 2 > nul'], { windowsHide: true }); }
     }
     fs.mkdirSync(path.dirname(INSTALL_DIR), { recursive: true });
     fs.cpSync(src, INSTALL_DIR, { recursive: true });
+    clearReadOnly(INSTALL_DIR);
     // A copy started from an older-style folder still has the old program file name (Gmail Desk.exe).
     const ownExe = path.basename(process.execPath);
     if (ownExe.toLowerCase() !== path.basename(INSTALLED_EXE).toLowerCase()) fs.renameSync(path.join(INSTALL_DIR, ownExe), INSTALLED_EXE);

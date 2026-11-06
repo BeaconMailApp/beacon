@@ -21,6 +21,7 @@ const later = require('./later');
 const calendar = require('./calendar');
 const priority = require('./priority');
 const { findCode } = require('./codes');
+const bootcheck = require('./bootcheck');
 
 const APP_NAME = win32.APP_NAME;
 const DISPLAY_NAME = win32.DISPLAY_NAME;
@@ -48,9 +49,16 @@ const startHidden = argv.includes('--hidden') || !!(toastArg && /^beacon-mail:\/
 
 // ---------------------------------------------------------------- single instance
 if (!app.requestSingleInstanceLock()) {
-  // An older copy may still be running in the tray. When this copy was opened by hand
-  // (not from the installed location), end the other one and start again.
-  if (IS_WIN && !win32.isInstalled() && !argv.includes('--after-kill')) {
+  // The running copy is frozen (no response for 30 seconds, for example a white window):
+  // end it and start fresh, instead of quietly doing nothing when you open Beacon.
+  const frozen = !argv.includes('--after-kill') ? bootcheck.frozenPid(app.getPath('userData')) : 0;
+  if (frozen) {
+    log('the running Beacon (pid ' + frozen + ') was frozen; ending it and starting again');
+    win32.killOthers();
+    app.relaunch({ args: process.argv.slice(1).concat(['--after-kill']) });
+  } else if (IS_WIN && !win32.isInstalled() && !argv.includes('--after-kill')) {
+    // An older copy may still be running in the tray. When this copy was opened by hand
+    // (not from the installed location), end the other one and start again.
     win32.killOthers();
     app.relaunch({ args: process.argv.slice(1).concat(['--after-kill']) });
   }
@@ -127,10 +135,17 @@ async function boot() {
     store.get().accounts.push({ id: 'mock1', email: 'you@example.com', name: 'Lawrence Rank', color: '#2a5bd7' }, { id: 'mock2', email: 'second.account@gmail.com', name: 'Second', color: '#d9480f' });
     store.get().active = 'mock1';
   }
+  // Startup safety net: notes each step, so a start that freezes is caught and logged.
+  const lastStart = bootcheck.begin(app.getPath('userData'), app.getVersion());
+  if (lastStart) log('the last start did not finish: ' + lastStart.version + ' stopped at "' + lastStart.step + '" (' + new Date(lastStart.started).toISOString() + '). Skipping update cleanup this time.');
+  bootcheck.step('start with Windows');
   if (win32.isInstalled()) win32.applyStartup(store.get().startup);
+  bootcheck.step('mail links');
   if (IS_WIN && win32.isInstalled() && !MOCK) app.setAsDefaultProtocolClient(PROTO);
   applyTheme();
+  bootcheck.step('window');
   createWindow();
+  bootcheck.step('tray');
   createTray();
   const s0 = store.get();
   if (s0.lastVersion && s0.lastVersion !== app.getVersion()) {
@@ -138,12 +153,15 @@ async function boot() {
     win.webContents.once('did-finish-load', () => setTimeout(() => send('updated', { from, to: app.getVersion() }), 1500));
   }
   if (s0.lastVersion !== app.getVersion()) { s0.lastVersion = app.getVersion(); store.save(); }
+  bootcheck.step('schedule and snooze');
   later.start({ accountObj, send, sendState, notify: (t, b) => notify(t, b, showWindow), accountIds: () => store.get().accounts.map((m) => m.id) });
+  bootcheck.step('updates');
   updater.start((st) => {
     send('update', fullUpdateStatus());
     refreshTray();
     if (!win || !win.isVisible()) notify('Beacon ' + st.ready.version + ' is ready', 'Click to open Beacon and restart it to update.', showWindow);
-  });
+  }, { skipCleanup: !!lastStart });
+  bootcheck.step('waiting for the window');
   setTimeout(pollAll, 3000);
   setInterval(pollAll, POLL_MS);
   powerMonitor.on('resume', () => setTimeout(pollAll, 5000));
@@ -485,7 +503,7 @@ const handle = (ch, fn) => ipcMain.handle(ch, async (e, ...args) => {
   }
 });
 
-handle('state', () => publicState());
+handle('state', () => { bootcheck.done(); return publicState(); });
 // Your own Google key (the public download ships without one).
 handle('client-load', async () => {
   const r = await dialog.showOpenDialog(win, { title: 'Choose your Google key file', properties: ['openFile'], filters: [{ name: 'Google key (JSON)', extensions: ['json'] }] });
@@ -676,17 +694,21 @@ handle('threads', async (id, opts) => {
   return pin(r);
 });
 // For You / Everything else: reads the inbox a page at a time and keeps the side you asked for.
+// Everything else keeps reading until it has a full page (up to 5 inbox pages of 100 per call), so
+// scrolling down brings in older mail in big batches for cleaning up. For You stays quick to open.
 async function listForYou(id, meta, opts) {
   const a = accountObj(id);
   const wantImportant = opts.forYou === 'imp';
+  const want = wantImportant ? 20 : Math.max(20, Math.min(100, Number(opts.max) || 50));
+  const pageSize = wantImportant ? 50 : 100; const maxPages = wantImportant ? 3 : 5;
   const out = []; let token = opts.pageToken || undefined; let next = null; let pages = 0;
   do {
-    const r = await a.listThreads({ labelIds: ['INBOX'], pageToken: token, max: 50 });
+    const r = await a.listThreads({ labelIds: ['INBOX'], pageToken: token, max: pageSize });
     try { contacts.learnFromRows(id, r.threads, meta.email); } catch (_) {}
     priority.scoreRows(id, r.threads, meta.email);
     out.push(...r.threads.filter((t) => t.priority && t.priority.important === wantImportant));
     next = r.nextPageToken || null; token = next; pages++;
-  } while (next && out.length < 20 && pages < 3);
+  } while (next && out.length < want && pages < maxPages);
   return { threads: out, nextPageToken: next };
 }
 handle('priority-teach', (id, rows, important) => { priority.teach(id, Array.isArray(rows) ? rows.slice(0, 500) : [], !!important); return true; });
@@ -975,6 +997,57 @@ handle('action-all', async (id, query, action) => {
   if (b.undo) { token = crypto.randomBytes(6).toString('hex'); bulkUndo.set(token, { id, ids, add: b.undo.add, remove: b.undo.remove }); setTimeout(() => bulkUndo.delete(token), 120000); }
   setTimeout(pollAll, 500);
   return { count: ids.length, undo: token };
+});
+// "Select every conversation" in For You or Everything else. Those tabs are Beacon's own sorting, not a
+// Gmail search, so Beacon reads the whole inbox, keeps the side you are on, then changes it in one go.
+const sideScans = new Map(); // token -> what the scan found, kept 10 minutes
+let sideRun = null;
+handle('foryou-scan', async (id, side) => {
+  const a = accountObj(id);
+  const meta = store.get().accounts.find((m) => m.id === id) || {};
+  const want = side === 'imp';
+  const run = { cancelled: false }; sideRun = run;
+  const found = []; let token; let scanned = 0;
+  do {
+    if (run.cancelled) return { cancelled: true };
+    const r = await a.listThreads({ labelIds: ['INBOX'], pageToken: token, max: 100 });
+    try { contacts.learnFromRows(id, r.threads, meta.email); } catch (_) {}
+    priority.scoreRows(id, r.threads, meta.email);
+    for (const t of r.threads) if (!t.partial && t.priority && t.priority.important === want) found.push({ id: t.id, m: t.messageIds || null, u: t.unreadIds || [] });
+    scanned += r.threads.length; token = r.nextPageToken;
+    send('foryou-progress', { accountId: id, scanned, found: found.length });
+  } while (token && scanned < 20000);
+  if (run.cancelled) return { cancelled: true };
+  if (sideRun === run) sideRun = null;
+  const key = crypto.randomBytes(6).toString('hex');
+  sideScans.set(key, { id, found }); setTimeout(() => sideScans.delete(key), 10 * 60 * 1000);
+  log('tab scan', side, 'scanned=' + scanned, 'found=' + found.length, token ? 'stopped at 20000' : '');
+  return { token: key, count: found.length, scanned, capped: !!token };
+});
+handle('foryou-cancel', () => { if (sideRun) sideRun.cancelled = true; sideRun = null; return true; });
+handle('foryou-apply', async (key, action) => {
+  const s = sideScans.get(key);
+  if (!s) throw new Error('That took too long. Select every conversation again.');
+  sideScans.delete(key);
+  const b = BULK[action];
+  if (!b) throw new Error('That action can\'t be done on everything at once.');
+  const a = accountObj(s.id);
+  let token = null;
+  if (s.found.every((t) => t.m && t.m.length)) {
+    // One batch request per 1,000 emails. Mark as read only touches the emails that were unread.
+    const ids = action === 'read' ? s.found.flatMap((t) => t.u) : s.found.flatMap((t) => t.m);
+    if (ids.length) await a.batchModify(ids, b.add, b.remove);
+    if (b.undo && ids.length) { token = crypto.randomBytes(6).toString('hex'); bulkUndo.set(token, { id: s.id, ids, add: b.undo.add, remove: b.undo.remove }); setTimeout(() => bulkUndo.delete(token), 120000); }
+    log('tab bulk', action, 'conversations=' + s.found.length, 'messages=' + ids.length);
+  } else {
+    // Older cached rows without message ids: one conversation at a time.
+    const fn = ACTIONS[action]; const queue = s.found.map((t) => t.id); let failed = 0;
+    await Promise.all(Array.from({ length: Math.min(5, queue.length) }, async () => { while (queue.length) { const t = queue.shift(); try { await fn(a, t); } catch (_) { failed++; } } }));
+    log('tab bulk one by one', action, 'conversations=' + s.found.length, 'failed=' + failed);
+  }
+  if (!['read', 'unread', 'star'].includes(action)) later.seen(s.id, s.found.map((t) => t.id));
+  setTimeout(pollAll, 500);
+  return { count: s.found.length, undo: token };
 });
 handle('action-all-undo', async (token) => {
   const u = bulkUndo.get(token);

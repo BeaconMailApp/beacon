@@ -1,7 +1,7 @@
 {
   "name": "beacon",
   "productName": "Beacon",
-  "version": "2.9.17",
+  "version": "2.9.20",
   "description": "Beacon for Gmail: your Gmail as a Windows app, built on the Gmail API.",
   "author": "Lawrence Rank",
   "main": "main.js",

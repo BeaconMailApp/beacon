@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { packager } = require('@electron/packager');
+const { clearReadOnly } = require('../src/fsutil');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
@@ -74,6 +75,8 @@ async function zipWithRetry(zip, cwd, folder) {
   const appDir = path.join(outDir, pkg.productName);
   fs.mkdirSync(outDir, { recursive: true });
   fs.renameSync(built, appDir);
+  // Folders copied out of OneDrive keep Read-only, and the zip would carry it into every install.
+  clearReadOnly(appDir);
   fs.rmSync(path.join(BUILDS, '.tmp'), { recursive: true, force: true });
 
   // Every source file must be in the build, byte for byte the same size.

@@ -9,6 +9,7 @@ const path = require('path');
 const os = require('os');
 const { app } = require('electron');
 const { execFile, spawn } = require('child_process');
+const { removeTree, removeTreeAsync, clearReadOnly } = require('./fsutil');
 const { log } = require('./log');
 const win32 = require('./winint');
 
@@ -115,9 +116,10 @@ async function prepare(c) {
   let appDir;
   if (c.zip) {
     const stage = path.join(STAGE_ROOT, c.version);
-    fs.rmSync(stage, { recursive: true, force: true });
+    removeTree(stage);
     fs.mkdirSync(stage, { recursive: true });
     await unzip(c.path, stage);
+    clearReadOnly(stage);
     appDir = appDirIn(stage);
   } else {
     appDir = appDirIn(c.path);
@@ -169,16 +171,16 @@ function apply({ hidden } = {}) {
 }
 
 /** Deletes unpacked updates that are already installed (or older). */
-function cleanStaged() {
+async function cleanStaged() {
   let names = [];
-  try { names = fs.readdirSync(STAGE_ROOT); } catch (_) { return; }
-  for (const n of names) if (!newer(n, app.getVersion())) { try { fs.rmSync(path.join(STAGE_ROOT, n), { recursive: true, force: true }); } catch (_) {} }
+  try { names = await fs.promises.readdir(STAGE_ROOT); } catch (_) { return; }
+  for (const n of names) if (!newer(n, app.getVersion())) { try { await removeTreeAsync(path.join(STAGE_ROOT, n)); } catch (e) { log('update cleanup skipped', n, e.code || e.message); } }
 }
 
-function start(cb) {
+function start(cb, { skipCleanup = false } = {}) {
   if (cb) onReady = cb;
   if (!enabled()) return;
-  cleanStaged();
+  if (!skipCleanup) setTimeout(cleanStaged, 10 * 1000); // after the window is up, so a stubborn folder never holds up start
   setTimeout(check, 15 * 1000);
   setInterval(check, CHECK_MS);
 }

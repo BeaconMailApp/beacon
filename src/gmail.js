@@ -296,6 +296,9 @@ function summarize(t, me) {
     unread: labels.has('UNREAD'), starred: labels.has('STARRED'), important: labels.has('IMPORTANT'),
     labelIds: [...labels],
     hasAttachment: msgs.some((m) => /multipart\/mixed/i.test((m.payload && m.payload.mimeType) || '')),
+    // For acting on a whole tab at once (For You / Everything else) with one batch request.
+    messageIds: msgs.filter((m) => !(m.labelIds || []).includes('DRAFT')).map((m) => m.id),
+    unreadIds: msgs.filter((m) => (m.labelIds || []).includes('UNREAD')).map((m) => m.id),
   };
 }
 function displayName(from) {
